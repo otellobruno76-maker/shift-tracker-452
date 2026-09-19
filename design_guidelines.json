@@ -1,0 +1,221 @@
+{
+  "project_name": "Registro Ore Lavoro",
+  "archetype": "THE PERFORMANCE PRO / TACTICAL MINIMALISM (Italian Blue-Collar Edition)",
+  "context_type": "MOBILE_WEB_APP",
+  "theme_preference": "light_with_high_contrast_accents_and_dark_mode_support",
+  "storage_policy": {
+    "version": 1,
+    "mode": "LOCAL-FIRST ONLY — no MongoDB, no FastAPI, no cloud database, no account, no login",
+    "engine": "IndexedDB (promise-wrapped repo layer in frontend/src/lib/repo.ts) so the app works fully offline",
+    "cloud_sync_readiness": "All reads/writes go through a single repository + store layer (lib/repo.ts + lib/store.ts); a future cloud sync can hook the same interface without touching UI code. DO NOT implement sync now.",
+    "demo_data": "Seeded on first run, labeled DATI DI PROVA, removable with ONE button; after removal the app is completely empty"
+  },
+  "compliance_language": {
+    "pdf_export_name": "Riepilogo Presenze e Stima Retribuzione — NEVER call it 'Cedolino'",
+    "net_label": "Stima netto — always presented as an estimate, never an official tax calculation",
+    "disclaimer": "Stima indicativa, non sostituisce la busta paga.",
+    "surcharges": "All percentages (straordinario, festivo, notturno, domenicale, reperibilità, trasferta) are user-configurable in Impostazioni — never universal values"
+  },
+  "colors": {
+    "surfaces": [
+      {
+        "name": "page",
+        "kind": "solid",
+        "bg": "#F4F5F8",
+        "on_bg": "#111827",
+        "on_bg_muted": "#4B5563",
+        "roles": { "link": "#1D4ED8", "error": "#B91C1C", "success": "#15803D", "warning": "#B45309" }
+      },
+      {
+        "name": "card",
+        "kind": "solid",
+        "bg": "#FFFFFF",
+        "on_bg": "#0F172A",
+        "on_bg_muted": "#475569",
+        "roles": {
+          "badge_overtime_bg": "#FEF3C7",
+          "badge_overtime_text": "#92400E",
+          "badge_holiday_bg": "#FEE2E2",
+          "badge_holiday_text": "#991B1B",
+          "badge_leave_bg": "#E0E7FF",
+          "badge_leave_text": "#3730A3",
+          "badge_sick_bg": "#FCE7F3",
+          "badge_sick_text": "#9D174D"
+        }
+      },
+      {
+        "name": "metric_primary",
+        "kind": "solid",
+        "bg": "#0F172A",
+        "on_bg": "#FFFFFF",
+        "on_bg_muted": "#94A3B8",
+        "roles": { "accent_highlight": "#38BDF8", "accent_gold": "#FBBF24" }
+      },
+      {
+        "name": "cta_banner",
+        "kind": "solid",
+        "bg": "#0284C7",
+        "on_bg": "#FFFFFF",
+        "on_bg_muted": "#E0F2FE",
+        "roles": { "badge_bg": "#0369A1", "badge_text": "#FFFFFF" }
+      },
+      {
+        "name": "bottom_nav",
+        "kind": "solid",
+        "bg": "#FFFFFF",
+        "on_bg": "#0F172A",
+        "on_bg_muted": "#64748B",
+        "roles": { "active_tab_bg": "#EFF6FF", "active_tab_text": "#0284C7" }
+      },
+      {
+        "name": "demo_notice",
+        "kind": "solid",
+        "bg": "#FFFBEB",
+        "on_bg": "#78350F",
+        "on_bg_muted": "#92400E",
+        "roles": { "btn_bg": "#D97706", "btn_text": "#FFFFFF" }
+      }
+    ],
+    "accent": "#0284C7",
+    "on_accent": "#FFFFFF",
+    "status_colors": {
+      "regular": "#0284C7",
+      "overtime": "#D97706",
+      "holiday": "#DC2626",
+      "night": "#4F46E5",
+      "standby": "#059669",
+      "travel": "#7C3AED",
+      "vacation": "#2563EB",
+      "sick": "#DB2777",
+      "permit": "#EA580C",
+      "rest": "#64748B"
+    }
+  },
+  "typography": {
+    "font_family_heading": "'Plus Jakarta Sans Variable', -apple-system, BlinkMacSystemFont, sans-serif",
+    "font_family_body": "'DM Sans Variable', -apple-system, BlinkMacSystemFont, sans-serif",
+    "scale_px": { "display": 40, "h1": 32, "h2": 24, "h3": 20, "h4": 18, "body": 16, "caption": 14, "tag": 12 },
+    "font_weights": { "normal": "400", "medium": "500", "semibold": "600", "bold": "700", "heavy": "800" },
+    "css_font_import": "@import \"@fontsource-variable/plus-jakarta-sans\";\n@import \"@fontsource-variable/dm-sans\";"
+  },
+  "entry_surfaces": {
+    "/": "mobile-first tactical command center — quick monthly selector + worker hero summary top, 4 primary stat blocks, secondary metrics row, high-prominence '+ Inserisci giornata' CTA, recent entries list and bottom nav"
+  },
+  "layout_and_navigation": {
+    "app_structure": "Mobile PWA viewport (max-w-md mx-auto on desktop, full viewport on mobile, installable on Android)",
+    "bottom_navigation_bar": {
+      "fixed": true,
+      "height_px": 64,
+      "tabs": [
+        { "id": "oggi", "label": "Oggi", "icon": "Clock", "route": "/" },
+        { "id": "calendario", "label": "Calendario", "icon": "CalendarDays", "route": "/calendario" },
+        { "id": "riepilogo", "label": "Riepilogo", "icon": "BarChart3", "route": "/riepilogo" },
+        { "id": "impostazioni", "label": "Impostazioni", "icon": "Settings2", "route": "/impostazioni" }
+      ]
+    },
+    "header": {
+      "type": "compact_brand_bar",
+      "title": "Registro Ore Lavoro",
+      "worker_profile_summary": "Nome Lavoratore + Azienda badge",
+      "month_stepper": "Left/Right arrow stepper: 'Mese Anno' e.g. 'Settembre 2026'"
+    }
+  },
+  "screen_specifications": {
+    "1_oggi_dashboard": {
+      "route": "/",
+      "title": "Registro Ore Lavoro",
+      "components": [
+        "DemoDataBanner (DATI DI PROVA indicator with 1-click 'Rimuovi dati di prova' button)",
+        "WorkerHeaderCard (Worker name, Company, Month/Year selector)",
+        "PrimaryMetricsGrid4 (Ore Lavorate, Ore Ordinarie, Ore Straordinarie, Giorni Lavorati) - High contrast dark obsidian card",
+        "SecondaryMetricsRow (Ore Festive, Ore Notturne, Stima compenso del mese + disclaimer)",
+        "PrimaryActionCTA (Enormous, 64px height, '+ Inserisci giornata')",
+        "TodayStatusCard (Quick visual of today's log status)",
+        "RecentEntriesList (Last 5 entries with status pills, hours, one-tap 'Copia giornata')"
+      ]
+    },
+    "2_inserimento_giornata": {
+      "route": "/inserisci",
+      "speed_target_seconds": 30,
+      "fields": [
+        "Tipo Giornata: Segmented toggle [Lavoro, Ferie, Malattia, Permesso, Riposo]",
+        "Data: Date picker defaulting to today (DD/MM/YYYY display) + quick Oggi/Ieri buttons",
+        "Orario di Lavoro: Ora Inizio / Ora Fine, 24h, midnight-crossing supported (21:00–05:00)",
+        "Pausa: Quick-tap pills [Nessuna, 15m, 30m, 45m, 60m, Personalizzata]",
+        "Ore Nette Calcolate Live: big preview (lavorate + ordinarie + straordinario)",
+        "Condizioni (big checkboxes): Giorno Festivo, Lavoro Notturno, Reperibilità, Trasferta",
+        "Note opzionale",
+        "Pulsanti: 'Salva giornata' (big primary) + 'Annulla'"
+      ]
+    },
+    "3_calendario": {
+      "route": "/calendario",
+      "title": "Calendario Mensile",
+      "components": [
+        "MonthNavigator",
+        "MonthlyCalendarGrid (7 columns Lun-Dom, day cell: number, hours badge, overtime badge, type dot, holiday tint)",
+        "DayDetailSheet (tap cell: full breakdown, Modifica / Duplica / Elimina with confirmation)",
+        "LegendBar (Lavoro, Straordinario, Festivo, Ferie, Malattia, Riposo)"
+      ]
+    },
+    "4_riepilogo": {
+      "route": "/riepilogo",
+      "title": "Riepilogo",
+      "views": [
+        "Tab 1: Riepilogo mensile (giorni, ore totali/ordinarie/straordinarie/festive/notturne, ferie, malattia, permessi, reperibilità, trasferte; compenso base stimato + maggiorazioni stimate una per una + totale stimato + Stima netto se attivata + disclaimer)",
+        "Tab 2: Riepilogo annuale (12 mesi: ore, straordinari, giorni, compenso stimato + totale annuale)",
+        "ExportCard titled 'Esporta Riepilogo Presenze e Stima Retribuzione': Esporta CSV, Esporta Riepilogo PDF, Esporta Backup JSON — NEVER 'Cedolino'"
+      ]
+    },
+    "5_impostazioni": {
+      "route": "/impostazioni",
+      "title": "Impostazioni",
+      "sections": [
+        "Dati Lavoratore & Azienda (Nome, Azienda)",
+        "Orario ordinario (ore ordinarie giornaliere default 8, ore ordinarie settimanali default 40)",
+        "Paga e maggiorazioni (paga oraria base €/h; % straordinario, festivo, notturno, domenicale, reperibilità, trasferta — ALL user-editable; indennità reperibilità €/giorno)",
+        "Stima netto mensile (facoltativa: attiva/disattiva + % trattenute indicativa, etichettata 'Stima netto', mai calcolo fiscale ufficiale)",
+        "Festività (festività patronale locale: nome + giorno/mese; elenco festività nazionali italiane pre-caricate)",
+        "Dati & Backup (Esporta backup JSON, Importa backup JSON, Rimuovi dati di prova)"
+      ]
+    }
+  },
+  "ux_rules_for_blue_collar_workers": {
+    "touch_targets": "Min 48-64px height for buttons and pills",
+    "quick_presets": "Instant pause pills avoid tedious time math",
+    "instant_feedback": "Live recalculation of net hours, overtime and estimated wage while typing",
+    "clarity": "High contrast, bold badges, zero ambiguous icons, all Italian",
+    "zero_manual_needed": "A non-technical user inserts a full day in ~30 seconds"
+  },
+  "data_testid_specifications": {
+    "nav_today": "nav-tab-oggi",
+    "nav_calendar": "nav-tab-calendario",
+    "nav_summary": "nav-tab-riepilogo",
+    "nav_settings": "nav-tab-impostazioni",
+    "btn_add_entry": "btn-add-entry-main",
+    "btn_save_entry": "btn-save-entry",
+    "btn_remove_demo_data": "btn-remove-demo-data",
+    "btn_export_csv": "btn-export-csv",
+    "btn_export_pdf": "btn-export-pdf",
+    "btn_export_backup": "btn-export-backup",
+    "input_date": "input-entry-date",
+    "input_time_start": "input-entry-time-start",
+    "input_time_end": "input-entry-time-end",
+    "metric_total_hours": "metric-total-hours",
+    "metric_overtime_hours": "metric-overtime-hours",
+    "metric_regular_hours": "metric-regular-hours",
+    "metric_worked_days": "metric-worked-days",
+    "metric_estimated_wage": "metric-estimated-wage"
+  },
+  "instructions_to_main_agent": [
+    "LOCAL-FIRST ONLY: build the whole app in the farm-ts frontend/src structure with Vite + React 19 + Tailwind CSS v4 + lucide-react. Do NOT use MongoDB, FastAPI, any /api endpoint, accounts or login. Persist everything (giornate, impostazioni, config) in IndexedDB via lib/repo.ts + lib/store.ts; the app must work completely offline.",
+    "Keep the architecture ready for future cloud sync: all data mutations flow through the single store layer; do not implement sync now.",
+    "Seed realistic Italian demo data (Mario Rossi, Edil Costruzioni S.r.l., current month) with varied days: standard 8h, long overtime day, night shift, Saturday, festivo, ferie, malattia, permesso, riposo, reperibilità, trasferta. Banner DATI DI PROVA with ONE button 'Rimuovi dati di prova' that empties the app completely.",
+    "Live net hour calculation (fine - inizio - pausa) with midnight-crossing support (21:00–05:00 = 8h).",
+    "Exports: CSV with Italian Excel separator (;) + BOM, one-tap JSON backup export/import in Impostazioni, and a simple generated PDF titled 'Riepilogo Presenze e Stima Retribuzione' — never use the word 'Cedolino'.",
+    "Any net amount is labeled 'Stima netto'; show the disclaimer 'Stima indicativa, non sostituisce la busta paga.' wherever an estimate appears.",
+    "Make all surcharge percentages user-editable in Impostazioni (straordinario, festivo, notturno, domenicale, reperibilità, trasferta) with defaults at 0; no universal/legal defaults.",
+    "Ship an installable Android PWA: manifest.webmanifest, theme-color, icons, and a service worker registered on the frontend (passthrough in dev, cache-first for static assets in production builds).",
+    "All text MUST be natural, friendly Italian: dates GG/MM/AAAA, 24h times, currency in Euro with Italian formatting."
+  ]
+}

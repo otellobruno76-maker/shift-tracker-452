@@ -1,0 +1,15 @@
+{
+  "name": "Registro Ore Lavoro",
+  "short_name": "Registro Ore",
+  "description": "Registra le ore di lavoro, straordinari e festivi e ottieni la stima del compenso.",
+  "lang": "it",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#F4F5F8",
+  "theme_color": "#0284C7",
+  "icons": [
+    { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ]
+}
