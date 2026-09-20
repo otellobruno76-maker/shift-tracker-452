@@ -4,10 +4,11 @@
 import { useSyncExternalStore } from "react";
 import { buildDemoData } from "./demo";
 import { repo } from "./repo";
-import { DEFAULT_SETTINGS, type DayEntry, type Settings } from "./types";
+import { DEFAULT_SETTINGS, type DayEntry, type DayTemplate, type Settings } from "./types";
 
 let days: DayEntry[] = [];
 let settings: Settings = DEFAULT_SETTINGS;
+let dayTemplates: DayTemplate[] = [];
 let demoActive = false;
 let ready = false;
 let hydrating = false;
@@ -28,6 +29,9 @@ export function useDays(): DayEntry[] {
 }
 export function useSettings(): Settings {
   return useSyncExternalStore(subscribe, () => settings);
+}
+export function useDayTemplates(): DayTemplate[] {
+  return useSyncExternalStore(subscribe, () => dayTemplates);
 }
 export function useDemoActive(): boolean {
   return useSyncExternalStore(subscribe, () => demoActive);
@@ -55,6 +59,21 @@ export function deleteEntry(id: string): void {
 export function saveSettings(patch: Partial<Settings>): void {
   settings = { ...settings, ...patch };
   void repo.putSettings(settings).catch(() => undefined);
+  emit();
+}
+
+export function saveDayTemplate(template: DayTemplate): void {
+  const exists = dayTemplates.some((item) => item.id === template.id);
+  dayTemplates = exists
+    ? dayTemplates.map((item) => (item.id === template.id ? template : item))
+    : [...dayTemplates, template];
+  void repo.putDayTemplates(dayTemplates).catch(() => undefined);
+  emit();
+}
+
+export function deleteDayTemplate(id: string): void {
+  dayTemplates = dayTemplates.filter((item) => item.id !== id);
+  void repo.putDayTemplates(dayTemplates).catch(() => undefined);
   emit();
 }
 
@@ -87,10 +106,11 @@ export function exportBackupPayload(): string {
   return JSON.stringify(
     {
       app: "registro-ore-lavoro",
-      version: 1,
+      version: 2,
       exportedAt: new Date().toISOString(),
       settings,
       days,
+      dayTemplates,
     },
     null,
     2,
@@ -113,7 +133,18 @@ export function importBackup(data: unknown): boolean {
     typeof d.settings === "object" && d.settings !== null
       ? ({ ...DEFAULT_SETTINGS, ...(d.settings as Partial<Settings>) } as Settings)
       : null;
+  const importedTemplates = Array.isArray(d.dayTemplates)
+    ? d.dayTemplates.filter(
+        (item): item is DayTemplate =>
+          typeof item === "object" &&
+          item !== null &&
+          typeof (item as DayTemplate).id === "string" &&
+          typeof (item as DayTemplate).name === "string" &&
+          typeof (item as DayTemplate).dayType === "string",
+      )
+    : [];
   days = [...valid].sort(byDate);
+  dayTemplates = importedTemplates;
   if (importedSettings) settings = importedSettings;
   demoActive = false;
   ready = true;
@@ -122,6 +153,7 @@ export function importBackup(data: unknown): boolean {
     .then(() => repo.putDays(days))
     .catch(() => undefined);
   if (importedSettings) void repo.putSettings(settings).catch(() => undefined);
+  void repo.putDayTemplates(dayTemplates).catch(() => undefined);
   void repo.putMeta("demo", false).catch(() => undefined);
   emit();
   return true;
@@ -132,12 +164,14 @@ export async function hydrateAndSeed(): Promise<void> {
   if (ready || hydrating) return;
   hydrating = true;
   try {
-    const [storedDays, storedSettings, demoFlag] = await Promise.all([
+    const [storedDays, storedSettings, storedTemplates, demoFlag] = await Promise.all([
       repo.getDays(),
       repo.getSettings(),
+      repo.getDayTemplates(),
       repo.getMeta("demo"),
     ]);
     days = storedDays;
+    dayTemplates = storedTemplates;
     if (storedSettings) settings = { ...DEFAULT_SETTINGS, ...storedSettings };
     demoActive = demoFlag === true;
     ready = true;

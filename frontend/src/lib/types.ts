@@ -24,6 +24,22 @@ export interface DayEntry {
   updatedAt: string;
 }
 
+/** A reusable shift preset. Dates and calculated holiday state are deliberately excluded. */
+export interface DayTemplate {
+  id: string;
+  name: string;
+  dayType: DayType;
+  start: string;
+  end: string;
+  breakMinutes: number;
+  notturno: boolean;
+  reperibilita: boolean;
+  trasferta: boolean;
+  note: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface Settings {
   workerName: string;
   company: string;
