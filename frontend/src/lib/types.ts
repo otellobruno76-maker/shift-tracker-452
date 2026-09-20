@@ -47,6 +47,9 @@ export interface DayTemplate {
 export interface Settings {
   workerName: string;
   company: string;
+  /** Contratto e livello, facoltativi. */
+  ccnl: string;
+  contractLevel: string;
   /** ore ordinarie giornaliere, default 8 */
   dailyOrdinaryHours: number;
   /** ore ordinarie settimanali, default 40 */
@@ -77,6 +80,8 @@ export interface Settings {
 export const DEFAULT_SETTINGS: Settings = {
   workerName: "",
   company: "",
+  ccnl: "",
+  contractLevel: "",
   dailyOrdinaryHours: 8,
   weeklyOrdinaryHours: 40,
   basePay: 0,
