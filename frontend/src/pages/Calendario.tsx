@@ -1,7 +1,10 @@
 import { useMemo, useState } from "react";
+import { CalendarCheck2, X } from "lucide-react";
+import BulkDaysDialog from "@/components/BulkDaysDialog";
 import EntrySheet from "@/components/EntrySheet";
 import MonthNav from "@/components/MonthNav";
-import WeeklySetupDialog from "@/components/WeeklySetupDialog";
+import { Button } from "@/components/ui/button";
+import { inclusiveDateRange } from "@/lib/bulkDays";
 import { currentMonthKey, isoDayList, parseMonthKey, todayISO, weekdayIndex } from "@/lib/dates";
 import { fmtHours } from "@/lib/hours";
 import { holidayName } from "@/lib/holidays";
@@ -31,6 +34,10 @@ export default function Calendario() {
   const settings = useSettings();
   const [selectedMonth, setSelectedMonth] = useState(currentMonthKey());
   const [openDate, setOpenDate] = useState<string | null>(null);
+  const [selectMode, setSelectMode] = useState(false);
+  const [rangeStart, setRangeStart] = useState<string | null>(null);
+  const [rangeEnd, setRangeEnd] = useState<string | null>(null);
+  const [bulkDialogOpen, setBulkDialogOpen] = useState(false);
   const { year, month } = parseMonthKey(selectedMonth);
   const dayList = isoDayList(year, month);
   const today = todayISO();
@@ -48,6 +55,29 @@ export default function Calendario() {
   }, [days, settings]);
 
   const leading = weekdayIndex(dayList[0]);
+  const selectedDates = useMemo(
+    () => rangeStart ? inclusiveDateRange(rangeStart, rangeEnd ?? rangeStart) : [],
+    [rangeEnd, rangeStart],
+  );
+  const selectedSet = useMemo(() => new Set(selectedDates), [selectedDates]);
+
+  const resetSelection = () => {
+    setRangeStart(null);
+    setRangeEnd(null);
+  };
+
+  const handleDayClick = (iso: string) => {
+    if (!selectMode) {
+      setOpenDate(iso);
+      return;
+    }
+    if (!rangeStart || rangeEnd) {
+      setRangeStart(iso);
+      setRangeEnd(null);
+      return;
+    }
+    setRangeEnd(iso);
+  };
 
   return (
     <div>
@@ -56,12 +86,25 @@ export default function Calendario() {
           Calendario
         </h1>
         <p className="text-sm text-[#4B5563]">
-          Tocca un giorno per aprire il dettaglio.
+          {selectMode
+            ? rangeStart && !rangeEnd ? "Ora tocca l’ultimo giorno dell’intervallo." : "Tocca il primo e l’ultimo giorno da compilare."
+            : "Tocca un giorno per aprire il dettaglio."}
         </p>
         <div className="mt-3">
           <MonthNav value={selectedMonth} onChange={setSelectedMonth} />
         </div>
-        <WeeklySetupDialog />
+        <Button
+          variant={selectMode ? "outline" : "default"}
+          className="mt-3 h-14 w-full rounded-2xl text-base font-extrabold"
+          data-testid="btn-toggle-day-selection"
+          onClick={() => {
+            if (selectMode) resetSelection();
+            setSelectMode((current) => !current);
+          }}
+        >
+          {selectMode ? <X className="mr-2 h-5 w-5" /> : <CalendarCheck2 className="mr-2 h-5 w-5" />}
+          {selectMode ? "Annulla selezione" : "Seleziona giorni"}
+        </Button>
       </header>
 
       <div className="mt-3 grid grid-cols-7 gap-1" data-testid="calendar-grid">
@@ -92,10 +135,13 @@ export default function Calendario() {
             <button
               key={iso}
               data-testid={`calendar-day-${iso}`}
-              onClick={() => setOpenDate(iso)}
+              onClick={() => handleDayClick(iso)}
+              aria-pressed={selectMode ? selectedSet.has(iso) : undefined}
               className={`flex h-20 flex-col items-center rounded-xl border p-1 pt-1.5 transition-transform duration-150 active:scale-[0.96] ${
                 holiday ? "border-[#FECACA] bg-[#FEF2F2]" : "border-[#E2E5EA] bg-white"
-              } ${isToday ? "ring-2 ring-[#0284C7]" : ""}`}
+              } ${isToday ? "ring-2 ring-[#0284C7]" : ""} ${
+                selectedSet.has(iso) ? "!border-[#0284C7] !bg-[#E0F2FE] ring-2 ring-[#0284C7]" : ""
+              }`}
             >
               <span
                 className={`text-xs font-bold ${
@@ -141,7 +187,30 @@ export default function Calendario() {
         <LegendChip color="#64748B" label="Riposo" />
       </div>
 
+      {selectMode && rangeStart && (
+        <div className="sticky bottom-20 z-20 mt-4 rounded-2xl border border-[#7DD3FC] bg-white p-3 shadow-xl" data-testid="selected-days-action">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <p className="font-extrabold text-[#0F172A]">{selectedDates.length} {selectedDates.length === 1 ? "giorno selezionato" : "giorni selezionati"}</p>
+              <p className="text-xs text-[#64748B]">{rangeEnd ? "Intervallo pronto" : "Scegli il giorno finale"}</p>
+            </div>
+            <Button disabled={!rangeEnd} className="h-12 shrink-0 font-extrabold" data-testid="btn-open-bulk-actions" onClick={() => setBulkDialogOpen(true)}>
+              Compila giorni
+            </Button>
+          </div>
+        </div>
+      )}
+
       <EntrySheet date={openDate} onOpenChange={(open) => { if (!open) setOpenDate(null); }} />
+      <BulkDaysDialog
+        open={bulkDialogOpen}
+        dates={selectedDates}
+        onOpenChange={setBulkDialogOpen}
+        onSaved={() => {
+          resetSelection();
+          setSelectMode(false);
+        }}
+      />
     </div>
   );
 }
