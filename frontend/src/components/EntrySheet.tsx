@@ -222,14 +222,25 @@ function SplitCard({
 
       <div className="mt-3 flex gap-2">
         {e.scheduledOrdinaryMinutes !== undefined ? (
-          <Button
-            className="h-11 flex-[2] text-sm font-bold"
-            data-testid={`btn-add-overtime-${e.id}`}
-            onClick={onOvertime}
-          >
-            <Plus className="mr-1.5 h-4 w-4" />
-            Straordinario
-          </Button>
+          <>
+            <Button
+              variant="outline"
+              className="h-11 flex-1 text-sm font-bold"
+              data-testid={`btn-edit-day-${e.id}`}
+              onClick={onEdit}
+            >
+              <Pencil className="mr-1 h-4 w-4" />
+              Modifica
+            </Button>
+            <Button
+              className="h-11 flex-[1.4] text-sm font-bold"
+              data-testid={`btn-add-overtime-${e.id}`}
+              onClick={onOvertime}
+            >
+              <Plus className="mr-1 h-4 w-4" />
+              Straordinario
+            </Button>
+          </>
         ) : (
           <>
             <Button
