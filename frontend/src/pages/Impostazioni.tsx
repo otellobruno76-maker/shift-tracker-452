@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { FileSearch, Trash2, Upload } from "lucide-react";
+import { FileSearch, Files, Trash2, Upload } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -69,6 +69,15 @@ export default function Impostazioni() {
         >
           <FileSearch className="mr-2 h-5 w-5" />
           Analizza un cedolino
+        </Button>
+        <Button
+          variant="outline"
+          className="h-14 w-full text-base font-extrabold"
+          data-testid="btn-my-payslips"
+          onClick={() => navigate("/cedolini")}
+        >
+          <Files className="mr-2 h-5 w-5" />
+          I miei cedolini
         </Button>
         {settings.payslipConfiguredAt && (
           <div className="rounded-xl bg-[#F0FDF4] p-3 text-sm text-[#166534]" data-testid="payslip-applied-summary">
