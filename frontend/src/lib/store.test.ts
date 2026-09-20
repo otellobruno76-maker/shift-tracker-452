@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { exportBackupPayload, importBackup, saveDayTemplate } from "./store";
+import {
+  clearRegister,
+  exportBackupPayload,
+  importBackup,
+  saveDayTemplate,
+  saveEntry,
+  saveSettings,
+} from "./store";
 import type { DayTemplate } from "./types";
 
 const template: DayTemplate = {
@@ -40,5 +47,35 @@ describe("Giornate tipo", () => {
 
     expect(imported).toBe(true);
     expect(JSON.parse(exportBackupPayload()).dayTemplates).toEqual([]);
+  });
+
+  it("azzera il registro preservando configurazione, paga, CCNL e giornate tipo", () => {
+    saveDayTemplate(template);
+    saveSettings({ basePay: 12.5, ccnl: "CCNL fittizio", contractLevel: "Livello X" });
+    saveEntry({
+      id: "giorno-1",
+      date: "2026-09-21",
+      dayType: "lavoro",
+      start: "",
+      end: "",
+      breakMinutes: 0,
+      scheduledOrdinaryMinutes: 480,
+      notturno: false,
+      reperibilita: false,
+      trasferta: false,
+      festivo: null,
+      note: "",
+      createdAt: "2026-09-21T08:00:00.000Z",
+      updatedAt: "2026-09-21T08:00:00.000Z",
+    });
+
+    clearRegister();
+    const backup = JSON.parse(exportBackupPayload());
+
+    expect(backup.days).toEqual([]);
+    expect(backup.settings.basePay).toBe(12.5);
+    expect(backup.settings.ccnl).toBe("CCNL fittizio");
+    expect(backup.settings.contractLevel).toBe("Livello X");
+    expect(backup.dayTemplates).toEqual([template]);
   });
 });
