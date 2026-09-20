@@ -17,6 +17,7 @@ describe("calcolo maggiorazioni dal cedolino", () => {
       Maggiorazione notturna +25%
       Maggiorazione festiva +30%
       Indennità mensa 80,00
+      Totale netto 1.800,00
     `);
 
     expect(result.basePay.value).toBe(10);
@@ -28,6 +29,7 @@ describe("calcolo maggiorazioni dal cedolino", () => {
     expect(result.ccnl.value).toBe("Multiservizi");
     expect(result.level.value).toBe("3");
     expect(result.allowances[0]).toMatchObject({ name: "Indennità mensa", amount: 80 });
+    expect(result.totals[0]).toMatchObject({ label: "Totale netto", value: 1800 });
   });
 
   it("non inventa le voci assenti", () => {
