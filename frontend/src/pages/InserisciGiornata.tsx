@@ -98,6 +98,9 @@ function FormBody({
   const [festivoManual, setFestivoManual] = useState(source ? source.festivo === true : false);
   const [festivoTouched, setFestivoTouched] = useState(source !== undefined && source.festivo !== null);
   const [note, setNote] = useState(source?.note ?? "");
+  const scheduledMode = Boolean(editId && source?.scheduledOrdinaryMinutes !== undefined);
+  const [scheduledHours, setScheduledHours] = useState(String((source?.scheduledOrdinaryMinutes ?? settings.dailyOrdinaryHours * 60) / 60));
+  const [scheduledOvertime, setScheduledOvertime] = useState(String((source?.manualOvertimeMinutes ?? 0) / 60));
   const [templateDialogOpen, setTemplateDialogOpen] = useState(false);
   const [templateName, setTemplateName] = useState("");
 
@@ -173,7 +176,18 @@ function FormBody({
       toast.error("Scegli la data della giornata.");
       return;
     }
-    if (dayType === "lavoro") {
+    if (dayType === "lavoro" && scheduledMode) {
+      const ordinary = Number(scheduledHours.replace(",", "."));
+      const overtime = Number(scheduledOvertime.replace(",", "."));
+      if (!Number.isFinite(ordinary) || ordinary <= 0 || ordinary > 24) {
+        toast.error("Controlla le ore ordinarie.");
+        return;
+      }
+      if (!Number.isFinite(overtime) || overtime < 0 || overtime > 16) {
+        toast.error("Controlla le ore straordinarie.");
+        return;
+      }
+    } else if (dayType === "lavoro") {
       if (!start) {
         toast.error("Inserisci l'ora di inizio.");
         return;
@@ -211,6 +225,12 @@ function FormBody({
       trasferta: dayType === "lavoro" ? trasferta : false,
       festivo: festivoTouched ? festivo : null,
       note: note.trim(),
+      scheduledOrdinaryMinutes: dayType === "lavoro" && scheduledMode
+        ? Math.round(Number(scheduledHours.replace(",", ".")) * 60)
+        : undefined,
+      manualOvertimeMinutes: dayType === "lavoro" && scheduledMode
+        ? Math.round(Number(scheduledOvertime.replace(",", ".")) * 60)
+        : undefined,
       createdAt: source && editId ? source.createdAt : now,
       updatedAt: now,
     };
@@ -371,7 +391,25 @@ function FormBody({
         </div>
       </div>
 
-      {dayType === "lavoro" && (
+      {dayType === "lavoro" && scheduledMode && (
+        <>
+          <section className="mt-4 rounded-2xl border border-[#BAE6FD] bg-[#F0F9FF] p-4" data-testid="scheduled-day-editor">
+            <h2 className="font-heading text-base font-extrabold">Giornata precompilata</h2>
+            <p className="mt-1 text-xs text-[#475569]">Modifica solo l’eccezione di questo giorno.</p>
+            <div className="mt-3 grid grid-cols-2 gap-3">
+              <div><Label htmlFor="scheduled-hours">Ore ordinarie</Label><Input id="scheduled-hours" inputMode="decimal" className="mt-1 h-12 text-base" value={scheduledHours} onChange={(event) => setScheduledHours(event.target.value)} /></div>
+              <div><Label htmlFor="scheduled-overtime">Straordinario</Label><Input id="scheduled-overtime" inputMode="decimal" className="mt-1 h-12 text-base" value={scheduledOvertime} onChange={(event) => setScheduledOvertime(event.target.value)} /></div>
+            </div>
+          </section>
+          <div className="mt-4 space-y-2" data-testid="flag-section">
+            <FlagRow label="Giorno festivo" checked={festivo} onCheckedChange={(v) => { setFestivoTouched(true); setFestivoManual(v); }} testid="flag-festivo" />
+            <FlagRow label="Reperibilità" checked={reperibilita} onCheckedChange={setReperibilita} testid="flag-reperibilita" />
+            <FlagRow label="Trasferta" checked={trasferta} onCheckedChange={setTrasferta} testid="flag-trasferta" />
+          </div>
+        </>
+      )}
+
+      {dayType === "lavoro" && !scheduledMode && (
         <>
           <div className="mt-4 grid grid-cols-2 gap-3">
             <div>
