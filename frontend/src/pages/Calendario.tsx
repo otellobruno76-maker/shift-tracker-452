@@ -1,7 +1,8 @@
 import { useMemo, useState } from "react";
-import { CalendarCheck2, X } from "lucide-react";
+import { CalendarCheck2, CalendarPlus2, RotateCcw, X } from "lucide-react";
 import BulkDaysDialog from "@/components/BulkDaysDialog";
 import EntrySheet from "@/components/EntrySheet";
+import MonthPrefillDialog from "@/components/MonthPrefillDialog";
 import MonthNav from "@/components/MonthNav";
 import { Button } from "@/components/ui/button";
 import { inclusiveDateRange } from "@/lib/bulkDays";
@@ -9,7 +10,8 @@ import { currentMonthKey, isoDayList, parseMonthKey, todayISO, weekdayIndex } fr
 import { fmtHours } from "@/lib/hours";
 import { holidayName } from "@/lib/holidays";
 import { computeSplits } from "@/lib/stats";
-import { useDays, useSettings } from "@/lib/store";
+import { undoLastBulkOperation, useCanUndoBulk, useDays, useSettings } from "@/lib/store";
+import { toast } from "sonner";
 import { DAY_TYPE_LABELS } from "@/lib/types";
 import type { DayType } from "@/lib/types";
 
@@ -32,12 +34,14 @@ interface DayInfo {
 export default function Calendario() {
   const days = useDays();
   const settings = useSettings();
+  const canUndoBulk = useCanUndoBulk();
   const [selectedMonth, setSelectedMonth] = useState(currentMonthKey());
   const [openDate, setOpenDate] = useState<string | null>(null);
   const [selectMode, setSelectMode] = useState(false);
   const [rangeStart, setRangeStart] = useState<string | null>(null);
   const [rangeEnd, setRangeEnd] = useState<string | null>(null);
   const [bulkDialogOpen, setBulkDialogOpen] = useState(false);
+  const [prefillOpen, setPrefillOpen] = useState(false);
   const { year, month } = parseMonthKey(selectedMonth);
   const dayList = isoDayList(year, month);
   const today = todayISO();
@@ -94,8 +98,16 @@ export default function Calendario() {
           <MonthNav value={selectedMonth} onChange={setSelectedMonth} />
         </div>
         <Button
-          variant={selectMode ? "outline" : "default"}
           className="mt-3 h-14 w-full rounded-2xl text-base font-extrabold"
+          data-testid="btn-open-month-prefill"
+          onClick={() => setPrefillOpen(true)}
+        >
+          <CalendarPlus2 className="mr-2 h-5 w-5" />
+          Precompila mese
+        </Button>
+        <Button
+          variant={selectMode ? "default" : "outline"}
+          className="mt-2 h-12 w-full rounded-2xl text-sm font-extrabold"
           data-testid="btn-toggle-day-selection"
           onClick={() => {
             if (selectMode) resetSelection();
@@ -105,6 +117,19 @@ export default function Calendario() {
           {selectMode ? <X className="mr-2 h-5 w-5" /> : <CalendarCheck2 className="mr-2 h-5 w-5" />}
           {selectMode ? "Annulla selezione" : "Seleziona giorni"}
         </Button>
+        {canUndoBulk && (
+          <Button
+            variant="ghost"
+            className="mt-1 h-11 w-full text-sm font-bold text-[#B45309]"
+            data-testid="btn-undo-last-bulk"
+            onClick={() => {
+              if (undoLastBulkOperation()) toast.success("Ultima compilazione annullata.");
+            }}
+          >
+            <RotateCcw className="mr-2 h-4 w-4" />
+            Annulla ultima operazione
+          </Button>
+        )}
       </header>
 
       <div className="mt-3 grid grid-cols-7 gap-1" data-testid="calendar-grid">
@@ -210,6 +235,12 @@ export default function Calendario() {
           resetSelection();
           setSelectMode(false);
         }}
+      />
+      <MonthPrefillDialog
+        open={prefillOpen}
+        monthKey={selectedMonth}
+        onOpenChange={setPrefillOpen}
+        onSaved={resetSelection}
       />
     </div>
   );
