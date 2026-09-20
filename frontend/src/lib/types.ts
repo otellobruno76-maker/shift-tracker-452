@@ -24,6 +24,24 @@ export interface DayEntry {
   updatedAt: string;
 }
 
+export interface PayslipRecord {
+  id: string;
+  /** Mese di competenza in formato YYYY-MM. */
+  month: string;
+  filename: string;
+  basePay: number | null;
+  ordinaryHours: number | null;
+  overtimeRates: number[];
+  nightPct: number | null;
+  holidayPct: number | null;
+  allowances: Array<{ name: string; amount: number | null }>;
+  ccnl: string;
+  level: string;
+  totals: Array<{ label: string; value: number }>;
+  uploadedAt: string;
+  updatedAt: string;
+}
+
 export interface Settings {
   workerName: string;
   company: string;
@@ -52,6 +70,13 @@ export interface Settings {
   patronalName: string;
   patronalMonth: number | null;
   patronalDay: number | null;
+  /** Dati facoltativi confermati dall'utente dopo la lettura locale del cedolino. */
+  overtimeRates: number[];
+  payslipReferenceHours: number | null;
+  ccnl: string;
+  contractLevel: string;
+  payslipAllowances: Array<{ name: string; amount: number | null }>;
+  payslipConfiguredAt: string | null;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -72,6 +97,12 @@ export const DEFAULT_SETTINGS: Settings = {
   patronalName: "",
   patronalMonth: null,
   patronalDay: null,
+  overtimeRates: [],
+  payslipReferenceHours: null,
+  ccnl: "",
+  contractLevel: "",
+  payslipAllowances: [],
+  payslipConfiguredAt: null,
 };
 
 export const DAY_TYPE_LABELS: Record<DayType, string> = {
