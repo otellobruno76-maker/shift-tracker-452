@@ -52,6 +52,13 @@ export interface Settings {
   patronalName: string;
   patronalMonth: number | null;
   patronalDay: number | null;
+  /** Dati facoltativi confermati dall'utente dopo la lettura locale del cedolino. */
+  overtimeRates: number[];
+  payslipReferenceHours: number | null;
+  ccnl: string;
+  contractLevel: string;
+  payslipAllowances: Array<{ name: string; amount: number | null }>;
+  payslipConfiguredAt: string | null;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -72,6 +79,12 @@ export const DEFAULT_SETTINGS: Settings = {
   patronalName: "",
   patronalMonth: null,
   patronalDay: null,
+  overtimeRates: [],
+  payslipReferenceHours: null,
+  ccnl: "",
+  contractLevel: "",
+  payslipAllowances: [],
+  payslipConfiguredAt: null,
 };
 
 export const DAY_TYPE_LABELS: Record<DayType, string> = {

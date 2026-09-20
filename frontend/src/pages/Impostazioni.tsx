@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import { Trash2, Upload } from "lucide-react";
+import { FileSearch, Trash2, Upload } from "lucide-react";
+import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Button } from "@/components/ui/button";
@@ -20,6 +21,7 @@ import { MONTHS_IT } from "@/lib/types";
 import type { ReactNode } from "react";
 
 export default function Impostazioni() {
+  const navigate = useNavigate();
   const settings = useSettings();
   const demo = useDemoActive();
   const fileRef = useRef<HTMLInputElement>(null);
@@ -54,6 +56,33 @@ export default function Impostazioni() {
           value={settings.company}
           onCommit={(v) => saveSettings({ company: v })}
         />
+      </Section>
+
+      <Section title="Configura da cedolino" testid="settings-payslip-config">
+        <p className="text-sm leading-relaxed text-[#4B5563]">
+          Leggi localmente un PDF o una foto della busta paga, controlla i dati rilevati e scegli cosa applicare.
+        </p>
+        <Button
+          className="h-14 w-full text-base font-extrabold"
+          data-testid="btn-configure-from-payslip"
+          onClick={() => navigate("/configura-cedolino")}
+        >
+          <FileSearch className="mr-2 h-5 w-5" />
+          Analizza un cedolino
+        </Button>
+        {settings.payslipConfiguredAt && (
+          <div className="rounded-xl bg-[#F0FDF4] p-3 text-sm text-[#166534]" data-testid="payslip-applied-summary">
+            <p className="font-extrabold">Ultimi dati confermati</p>
+            <div className="mt-1 space-y-0.5">
+              {settings.ccnl && <p>CCNL: {settings.ccnl}</p>}
+              {settings.contractLevel && <p>Livello: {settings.contractLevel}</p>}
+              {settings.overtimeRates.length > 0 && <p>Straordinari: {settings.overtimeRates.map((rate) => `+${rate}%`).join(", ")}</p>}
+              {settings.payslipReferenceHours !== null && <p>Ore indicate sul cedolino: {settings.payslipReferenceHours}</p>}
+              {settings.payslipAllowances.length > 0 && <p>Indennità rilevate: {settings.payslipAllowances.map((item) => item.name).join(", ")}</p>}
+            </div>
+          </div>
+        )}
+        <p className="text-xs text-[#64748B]">Il documento non viene salvato né inviato a servizi esterni. I risultati sono una stima: verifica consigliata.</p>
       </Section>
 
       <Section title="Orario ordinario" testid="settings-schedule">
