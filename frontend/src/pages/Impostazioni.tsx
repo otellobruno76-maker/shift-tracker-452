@@ -5,6 +5,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import {
   Select,
   SelectContent,
@@ -15,7 +16,7 @@ import {
 import { fmtDateIt } from "@/lib/dates";
 import { exportBackupFile, importBackupFile } from "@/lib/export";
 import { nationalHolidays } from "@/lib/holidays";
-import { removeDemoData, saveSettings, useDemoActive, useSettings } from "@/lib/store";
+import { clearRegister, removeDemoData, saveSettings, useDemoActive, useSettings } from "@/lib/store";
 import { MONTHS_IT } from "@/lib/types";
 import type { ReactNode } from "react";
 
@@ -24,6 +25,7 @@ export default function Impostazioni() {
   const demo = useDemoActive();
   const fileRef = useRef<HTMLInputElement>(null);
   const thisYear = new Date().getFullYear();
+  const [clearDialogOpen, setClearDialogOpen] = useState(false);
 
   return (
     <div>
@@ -54,6 +56,8 @@ export default function Impostazioni() {
           value={settings.company}
           onCommit={(v) => saveSettings({ company: v })}
         />
+        <TextField label="CCNL (facoltativo)" placeholder="Es. Metalmeccanica Industria" testid="settings-ccnl" value={settings.ccnl} onCommit={(v) => saveSettings({ ccnl: v })} />
+        <TextField label="Livello (facoltativo)" placeholder="Es. C2" testid="settings-contract-level" value={settings.contractLevel} onCommit={(v) => saveSettings({ contractLevel: v })} />
       </Section>
 
       <Section title="Orario ordinario" testid="settings-schedule">
@@ -303,11 +307,31 @@ export default function Impostazioni() {
             Rimuovi dati di prova
           </Button>
         )}
+        <Button
+          variant="outline"
+          className="h-14 w-full border-[#FECACA] text-base font-extrabold text-[#B91C1C] hover:bg-[#FEF2F2]"
+          data-testid="btn-clear-register"
+          onClick={() => setClearDialogOpen(true)}
+        >
+          <Trash2 className="mr-2 h-5 w-5" />
+          Azzera registro
+        </Button>
         <p className="text-xs text-[#64748B]">
           I tuoi dati restano solo su questo dispositivo: nessun account, nessun cloud. Per
           spostarli su un altro telefono usa Esporta/Importa backup.
         </p>
       </Section>
+
+      <Dialog open={clearDialogOpen} onOpenChange={setClearDialogOpen}>
+        <DialogContent className="rounded-2xl" data-testid="clear-register-dialog">
+          <DialogHeader><DialogTitle>Azzerare tutto il registro ore?</DialogTitle></DialogHeader>
+          <p className="text-sm text-[#64748B]">Saranno eliminate tutte le giornate. Impostazioni, paga, CCNL e Giornate tipo resteranno salvati.</p>
+          <DialogFooter className="gap-2">
+            <Button variant="outline" onClick={() => setClearDialogOpen(false)}>Annulla</Button>
+            <Button variant="destructive" data-testid="btn-confirm-clear-register" onClick={() => { clearRegister(); setClearDialogOpen(false); toast.success("Registro azzerato. Configurazioni mantenute."); }}>Azzera registro</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

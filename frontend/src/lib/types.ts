@@ -20,6 +20,26 @@ export interface DayEntry {
   /** true/false = manual override, null = auto (Italian holiday list + patronal) */
   festivo: boolean | null;
   note: string;
+  /** Ore ordinarie inserite in blocco dal calendario, senza obbligo di orario. */
+  scheduledOrdinaryMinutes?: number;
+  /** Straordinario aggiunto successivamente a una giornata programmata. */
+  manualOvertimeMinutes?: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** A reusable shift preset. Dates and calculated holiday state are deliberately excluded. */
+export interface DayTemplate {
+  id: string;
+  name: string;
+  dayType: DayType;
+  start: string;
+  end: string;
+  breakMinutes: number;
+  notturno: boolean;
+  reperibilita: boolean;
+  trasferta: boolean;
+  note: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -27,6 +47,9 @@ export interface DayEntry {
 export interface Settings {
   workerName: string;
   company: string;
+  /** Contratto e livello, facoltativi. */
+  ccnl: string;
+  contractLevel: string;
   /** ore ordinarie giornaliere, default 8 */
   dailyOrdinaryHours: number;
   /** ore ordinarie settimanali, default 40 */
@@ -57,6 +80,8 @@ export interface Settings {
 export const DEFAULT_SETTINGS: Settings = {
   workerName: "",
   company: "",
+  ccnl: "",
+  contractLevel: "",
   dailyOrdinaryHours: 8,
   weeklyOrdinaryHours: 40,
   basePay: 0,

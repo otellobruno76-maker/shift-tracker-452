@@ -4,13 +4,16 @@
 import { useSyncExternalStore } from "react";
 import { buildDemoData } from "./demo";
 import { repo } from "./repo";
-import { DEFAULT_SETTINGS, type DayEntry, type Settings } from "./types";
+import { DEFAULT_SETTINGS, type DayEntry, type DayTemplate, type Settings } from "./types";
 
 let days: DayEntry[] = [];
 let settings: Settings = DEFAULT_SETTINGS;
+let dayTemplates: DayTemplate[] = [];
 let demoActive = false;
 let ready = false;
 let hydrating = false;
+let lastBulkSnapshot: DayEntry[] | null = null;
+let lastBulkDates: string[] = [];
 
 const listeners = new Set<() => void>();
 function emit(): void {
@@ -29,11 +32,17 @@ export function useDays(): DayEntry[] {
 export function useSettings(): Settings {
   return useSyncExternalStore(subscribe, () => settings);
 }
+export function useDayTemplates(): DayTemplate[] {
+  return useSyncExternalStore(subscribe, () => dayTemplates);
+}
 export function useDemoActive(): boolean {
   return useSyncExternalStore(subscribe, () => demoActive);
 }
 export function useAppReady(): boolean {
   return useSyncExternalStore(subscribe, () => ready);
+}
+export function useCanUndoBulk(): boolean {
+  return useSyncExternalStore(subscribe, () => lastBulkSnapshot !== null);
 }
 
 const byDate = (a: DayEntry, b: DayEntry) =>
@@ -46,6 +55,53 @@ export function saveEntry(entry: DayEntry): void {
   emit();
 }
 
+export function saveEntries(entries: DayEntry[]): void {
+  if (entries.length === 0) return;
+  const incoming = new Map(entries.map((entry) => [entry.id, entry]));
+  days = [
+    ...days.map((entry) => incoming.get(entry.id) ?? entry),
+    ...entries.filter((entry) => !days.some((existing) => existing.id === entry.id)),
+  ].sort(byDate);
+  void repo.putDays(entries).catch(() => undefined);
+  emit();
+}
+
+export function applyBulkEntries(entries: DayEntry[], replaceDates: string[] = []): void {
+  const touched = [...new Set([...entries.map((entry) => entry.date), ...replaceDates])];
+  lastBulkDates = touched;
+  lastBulkSnapshot = days.filter((entry) => touched.includes(entry.date));
+  const replaced = new Set(replaceDates);
+  const removedIds = days.filter((entry) => replaced.has(entry.date)).map((entry) => entry.id);
+  days = [...days.filter((entry) => !replaced.has(entry.date)), ...entries].sort(byDate);
+  for (const id of removedIds) void repo.deleteDay(id).catch(() => undefined);
+  void repo.putDays(entries).catch(() => undefined);
+  emit();
+}
+
+export function undoLastBulkOperation(): boolean {
+  if (lastBulkSnapshot === null) return false;
+  const affected = new Set(lastBulkDates);
+  const currentIds = days.filter((entry) => affected.has(entry.date)).map((entry) => entry.id);
+  days = [...days.filter((entry) => !affected.has(entry.date)), ...lastBulkSnapshot].sort(byDate);
+  for (const id of currentIds) void repo.deleteDay(id).catch(() => undefined);
+  void repo.putDays(lastBulkSnapshot).catch(() => undefined);
+  lastBulkSnapshot = null;
+  lastBulkDates = [];
+  emit();
+  return true;
+}
+
+/** Cancella solo il registro ore; impostazioni e giornate tipo restano invariati. */
+export function clearRegister(): void {
+  days = [];
+  demoActive = false;
+  lastBulkSnapshot = null;
+  lastBulkDates = [];
+  void repo.clearDays().catch(() => undefined);
+  void repo.putMeta("demo", false).catch(() => undefined);
+  emit();
+}
+
 export function deleteEntry(id: string): void {
   days = days.filter((d) => d.id !== id);
   void repo.deleteDay(id).catch(() => undefined);
@@ -55,6 +111,21 @@ export function deleteEntry(id: string): void {
 export function saveSettings(patch: Partial<Settings>): void {
   settings = { ...settings, ...patch };
   void repo.putSettings(settings).catch(() => undefined);
+  emit();
+}
+
+export function saveDayTemplate(template: DayTemplate): void {
+  const exists = dayTemplates.some((item) => item.id === template.id);
+  dayTemplates = exists
+    ? dayTemplates.map((item) => (item.id === template.id ? template : item))
+    : [...dayTemplates, template];
+  void repo.putDayTemplates(dayTemplates).catch(() => undefined);
+  emit();
+}
+
+export function deleteDayTemplate(id: string): void {
+  dayTemplates = dayTemplates.filter((item) => item.id !== id);
+  void repo.putDayTemplates(dayTemplates).catch(() => undefined);
   emit();
 }
 
@@ -87,10 +158,11 @@ export function exportBackupPayload(): string {
   return JSON.stringify(
     {
       app: "registro-ore-lavoro",
-      version: 1,
+      version: 2,
       exportedAt: new Date().toISOString(),
       settings,
       days,
+      dayTemplates,
     },
     null,
     2,
@@ -113,7 +185,18 @@ export function importBackup(data: unknown): boolean {
     typeof d.settings === "object" && d.settings !== null
       ? ({ ...DEFAULT_SETTINGS, ...(d.settings as Partial<Settings>) } as Settings)
       : null;
+  const importedTemplates = Array.isArray(d.dayTemplates)
+    ? d.dayTemplates.filter(
+        (item): item is DayTemplate =>
+          typeof item === "object" &&
+          item !== null &&
+          typeof (item as DayTemplate).id === "string" &&
+          typeof (item as DayTemplate).name === "string" &&
+          typeof (item as DayTemplate).dayType === "string",
+      )
+    : [];
   days = [...valid].sort(byDate);
+  dayTemplates = importedTemplates;
   if (importedSettings) settings = importedSettings;
   demoActive = false;
   ready = true;
@@ -122,6 +205,7 @@ export function importBackup(data: unknown): boolean {
     .then(() => repo.putDays(days))
     .catch(() => undefined);
   if (importedSettings) void repo.putSettings(settings).catch(() => undefined);
+  void repo.putDayTemplates(dayTemplates).catch(() => undefined);
   void repo.putMeta("demo", false).catch(() => undefined);
   emit();
   return true;
@@ -132,12 +216,14 @@ export async function hydrateAndSeed(): Promise<void> {
   if (ready || hydrating) return;
   hydrating = true;
   try {
-    const [storedDays, storedSettings, demoFlag] = await Promise.all([
+    const [storedDays, storedSettings, storedTemplates, demoFlag] = await Promise.all([
       repo.getDays(),
       repo.getSettings(),
+      repo.getDayTemplates(),
       repo.getMeta("demo"),
     ]);
     days = storedDays;
+    dayTemplates = storedTemplates;
     if (storedSettings) settings = { ...DEFAULT_SETTINGS, ...storedSettings };
     demoActive = demoFlag === true;
     ready = true;

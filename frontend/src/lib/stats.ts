@@ -56,6 +56,9 @@ export function isFestivoDay(entry: DayEntry, settings: Settings): boolean {
 
 export function entryNetMinutes(entry: DayEntry): number {
   if (entry.dayType !== "lavoro") return 0;
+  if (entry.scheduledOrdinaryMinutes !== undefined) {
+    return Math.max(0, entry.scheduledOrdinaryMinutes) + Math.max(0, entry.manualOvertimeMinutes ?? 0);
+  }
   const shift = computeShift(entry.start, entry.end, entry.breakMinutes);
   if (!shift) return 0;
   return Math.max(0, shift.net);
@@ -97,13 +100,14 @@ export function computeSplits(days: DayEntry[], settings: Settings): EntrySplit[
       };
     }
     const net = entryNetMinutes(entry);
-    const ordinary = Math.max(0, Math.min(net, dailyLimit, weeklyRemaining));
+    const plannedOrdinary = entry.scheduledOrdinaryMinutes ?? net;
+    const ordinary = Math.max(0, Math.min(plannedOrdinary, dailyLimit, weeklyRemaining));
     weeklyRemaining -= ordinary;
     return {
       entry,
       net,
       ordinary,
-      overtime: net - ordinary,
+      overtime: Math.max(0, net - ordinary),
       night: entry.notturno ? net : 0,
       festivo,
       sunday,
