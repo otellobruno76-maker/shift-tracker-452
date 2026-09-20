@@ -9,7 +9,7 @@ import { Label } from "@/components/ui/label";
 import { buildBulkEntries, valuesFromTemplate } from "@/lib/bulkDays";
 import { fmtDateIt } from "@/lib/dates";
 import { computeShift, fmtHours } from "@/lib/hours";
-import { deleteEntry, saveEntries, useDayTemplates, useDays } from "@/lib/store";
+import { applyBulkEntries, useDayTemplates, useDays } from "@/lib/store";
 import { DAY_TYPE_LABELS } from "@/lib/types";
 import type { BulkDayValues } from "@/lib/bulkDays";
 import type { DayType } from "@/lib/types";
@@ -91,11 +91,8 @@ export default function BulkDaysDialog({ open, dates, onOpenChange, onSaved }: P
 
   const save = () => {
     if (!validate() || !values) return;
-    if (overwrite) {
-      days.filter((entry) => occupiedDates.includes(entry.date)).forEach((entry) => deleteEntry(entry.id));
-    }
     const entries = buildBulkEntries(datesToWrite, values);
-    saveEntries(entries);
+    applyBulkEntries(entries, overwrite ? occupiedDates : []);
     onSaved();
     onOpenChange(false);
     const skipped = dates.length - datesToWrite.length;
