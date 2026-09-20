@@ -28,6 +28,7 @@ export interface PayslipAnalysis {
   allowances: DetectedAllowance[];
   ccnl: DetectedValue<string>;
   level: DetectedValue<string>;
+  totals: Array<{ label: string; value: number; source: string }>;
 }
 
 export interface ConfirmedPayslipValues {
@@ -45,7 +46,10 @@ const missingNumber = (): DetectedValue<number> => ({ value: null, source: "Non 
 const missingText = (): DetectedValue<string> => ({ value: null, source: "Non rilevata", confidence: "bassa" });
 
 function numberIt(raw: string): number | null {
-  const cleaned = raw.replace(/\s/g, "").replace(/\.(?=\d{3}(?:\D|$))/g, "").replace(",", ".");
+  const compacted = raw.replace(/\s/g, "");
+  const cleaned = compacted.includes(",") && compacted.includes(".")
+    ? compacted.replace(/\./g, "").replace(",", ".")
+    : compacted.replace(",", ".");
   const value = Number(cleaned);
   return Number.isFinite(value) ? value : null;
 }
@@ -157,6 +161,13 @@ export function analyzePayslipText(rawText: string): PayslipAnalysis {
     }
   }
 
+  const totals: Array<{ label: string; value: number; source: string }> = [];
+  for (const line of lines) {
+    const match = line.match(/(totale\s+(?:competenze|lordo|netto|ore)|netto\s+(?:in\s+)?busta)[^\d]{0,20}(\d{1,3}(?:\.\d{3})*(?:,\d{1,2})?|\d+(?:[.,]\d{1,2})?)/i);
+    const value = match ? numberIt(match[2]) : null;
+    if (match && value !== null) totals.push({ label: compact(match[1]), value, source: compact(line) });
+  }
+
   return {
     basePay,
     ordinaryHours,
@@ -166,6 +177,7 @@ export function analyzePayslipText(rawText: string): PayslipAnalysis {
     allowances: allowances.slice(0, 8),
     ccnl,
     level,
+    totals: totals.slice(0, 6),
   };
 }
 
