@@ -4,10 +4,11 @@
 import { useSyncExternalStore } from "react";
 import { buildDemoData } from "./demo";
 import { repo } from "./repo";
-import { DEFAULT_SETTINGS, type DayEntry, type Settings } from "./types";
+import { DEFAULT_SETTINGS, type DayEntry, type PayslipRecord, type Settings } from "./types";
 
 let days: DayEntry[] = [];
 let settings: Settings = DEFAULT_SETTINGS;
+let payslips: PayslipRecord[] = [];
 let demoActive = false;
 let ready = false;
 let hydrating = false;
@@ -28,6 +29,9 @@ export function useDays(): DayEntry[] {
 }
 export function useSettings(): Settings {
   return useSyncExternalStore(subscribe, () => settings);
+}
+export function usePayslips(): PayslipRecord[] {
+  return useSyncExternalStore(subscribe, () => payslips);
 }
 export function useDemoActive(): boolean {
   return useSyncExternalStore(subscribe, () => demoActive);
@@ -55,6 +59,24 @@ export function deleteEntry(id: string): void {
 export function saveSettings(patch: Partial<Settings>): void {
   settings = { ...settings, ...patch };
   void repo.putSettings(settings).catch(() => undefined);
+  emit();
+}
+
+export function savePayslip(record: PayslipRecord): void {
+  const sameMonth = payslips.find((item) => item.month === record.month && item.id !== record.id);
+  if (sameMonth) {
+    payslips = payslips.filter((item) => item.id !== sameMonth.id);
+  }
+  payslips = (payslips.some((item) => item.id === record.id)
+    ? payslips.map((item) => item.id === record.id ? record : item)
+    : [...payslips, record]).sort((a, b) => b.month.localeCompare(a.month));
+  void repo.putPayslips(payslips).catch(() => undefined);
+  emit();
+}
+
+export function deletePayslip(id: string): void {
+  payslips = payslips.filter((item) => item.id !== id);
+  void repo.putPayslips(payslips).catch(() => undefined);
   emit();
 }
 
@@ -87,10 +109,11 @@ export function exportBackupPayload(): string {
   return JSON.stringify(
     {
       app: "registro-ore-lavoro",
-      version: 1,
+      version: 2,
       exportedAt: new Date().toISOString(),
       settings,
       days,
+      payslips,
     },
     null,
     2,
@@ -113,7 +136,14 @@ export function importBackup(data: unknown): boolean {
     typeof d.settings === "object" && d.settings !== null
       ? ({ ...DEFAULT_SETTINGS, ...(d.settings as Partial<Settings>) } as Settings)
       : null;
+  const importedPayslips = Array.isArray(d.payslips)
+    ? d.payslips.filter((item): item is PayslipRecord =>
+        typeof item === "object" && item !== null &&
+        typeof (item as PayslipRecord).id === "string" &&
+        typeof (item as PayslipRecord).month === "string")
+    : [];
   days = [...valid].sort(byDate);
+  payslips = importedPayslips.sort((a, b) => b.month.localeCompare(a.month));
   if (importedSettings) settings = importedSettings;
   demoActive = false;
   ready = true;
@@ -122,6 +152,7 @@ export function importBackup(data: unknown): boolean {
     .then(() => repo.putDays(days))
     .catch(() => undefined);
   if (importedSettings) void repo.putSettings(settings).catch(() => undefined);
+  void repo.putPayslips(payslips).catch(() => undefined);
   void repo.putMeta("demo", false).catch(() => undefined);
   emit();
   return true;
@@ -132,12 +163,14 @@ export async function hydrateAndSeed(): Promise<void> {
   if (ready || hydrating) return;
   hydrating = true;
   try {
-    const [storedDays, storedSettings, demoFlag] = await Promise.all([
+    const [storedDays, storedSettings, storedPayslips, demoFlag] = await Promise.all([
       repo.getDays(),
       repo.getSettings(),
+      repo.getPayslips(),
       repo.getMeta("demo"),
     ]);
     days = storedDays;
+    payslips = storedPayslips;
     if (storedSettings) settings = { ...DEFAULT_SETTINGS, ...storedSettings };
     demoActive = demoFlag === true;
     ready = true;
