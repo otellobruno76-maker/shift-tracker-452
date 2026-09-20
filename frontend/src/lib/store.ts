@@ -12,6 +12,8 @@ let dayTemplates: DayTemplate[] = [];
 let demoActive = false;
 let ready = false;
 let hydrating = false;
+let lastBulkSnapshot: DayEntry[] | null = null;
+let lastBulkDates: string[] = [];
 
 const listeners = new Set<() => void>();
 function emit(): void {
@@ -39,6 +41,9 @@ export function useDemoActive(): boolean {
 export function useAppReady(): boolean {
   return useSyncExternalStore(subscribe, () => ready);
 }
+export function useCanUndoBulk(): boolean {
+  return useSyncExternalStore(subscribe, () => lastBulkSnapshot !== null);
+}
 
 const byDate = (a: DayEntry, b: DayEntry) =>
   a.date.localeCompare(b.date) || a.createdAt.localeCompare(b.createdAt);
@@ -58,6 +63,42 @@ export function saveEntries(entries: DayEntry[]): void {
     ...entries.filter((entry) => !days.some((existing) => existing.id === entry.id)),
   ].sort(byDate);
   void repo.putDays(entries).catch(() => undefined);
+  emit();
+}
+
+export function applyBulkEntries(entries: DayEntry[], replaceDates: string[] = []): void {
+  const touched = [...new Set([...entries.map((entry) => entry.date), ...replaceDates])];
+  lastBulkDates = touched;
+  lastBulkSnapshot = days.filter((entry) => touched.includes(entry.date));
+  const replaced = new Set(replaceDates);
+  const removedIds = days.filter((entry) => replaced.has(entry.date)).map((entry) => entry.id);
+  days = [...days.filter((entry) => !replaced.has(entry.date)), ...entries].sort(byDate);
+  for (const id of removedIds) void repo.deleteDay(id).catch(() => undefined);
+  void repo.putDays(entries).catch(() => undefined);
+  emit();
+}
+
+export function undoLastBulkOperation(): boolean {
+  if (lastBulkSnapshot === null) return false;
+  const affected = new Set(lastBulkDates);
+  const currentIds = days.filter((entry) => affected.has(entry.date)).map((entry) => entry.id);
+  days = [...days.filter((entry) => !affected.has(entry.date)), ...lastBulkSnapshot].sort(byDate);
+  for (const id of currentIds) void repo.deleteDay(id).catch(() => undefined);
+  void repo.putDays(lastBulkSnapshot).catch(() => undefined);
+  lastBulkSnapshot = null;
+  lastBulkDates = [];
+  emit();
+  return true;
+}
+
+/** Cancella solo il registro ore; impostazioni e giornate tipo restano invariati. */
+export function clearRegister(): void {
+  days = [];
+  demoActive = false;
+  lastBulkSnapshot = null;
+  lastBulkDates = [];
+  void repo.clearDays().catch(() => undefined);
+  void repo.putMeta("demo", false).catch(() => undefined);
   emit();
 }
 
