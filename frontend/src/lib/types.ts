@@ -24,6 +24,24 @@ export interface DayEntry {
   updatedAt: string;
 }
 
+export interface PayslipRecord {
+  id: string;
+  /** Mese di competenza in formato YYYY-MM. */
+  month: string;
+  filename: string;
+  basePay: number | null;
+  ordinaryHours: number | null;
+  overtimeRates: number[];
+  nightPct: number | null;
+  holidayPct: number | null;
+  allowances: Array<{ name: string; amount: number | null }>;
+  ccnl: string;
+  level: string;
+  totals: Array<{ label: string; value: number }>;
+  uploadedAt: string;
+  updatedAt: string;
+}
+
 export interface Settings {
   workerName: string;
   company: string;
