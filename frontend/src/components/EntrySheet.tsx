@@ -1,9 +1,11 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Copy, Pencil, Trash2 } from "lucide-react";
+import { Copy, Pencil, Plus, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import {
   Dialog,
   DialogContent,
@@ -15,7 +17,7 @@ import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sh
 import { weekdayLong } from "@/lib/dates";
 import { computeShift, fmtHours } from "@/lib/hours";
 import { computeSplits } from "@/lib/stats";
-import { deleteEntry, useDays, useSettings } from "@/lib/store";
+import { deleteEntry, saveEntry, useDays, useSettings } from "@/lib/store";
 import { DAY_TYPE_LABELS } from "@/lib/types";
 import type { EntrySplit } from "@/lib/stats";
 
@@ -29,6 +31,8 @@ export default function EntrySheet({ date, onOpenChange }: EntrySheetProps) {
   const settings = useSettings();
   const navigate = useNavigate();
   const [deleteId, setDeleteId] = useState<string | null>(null);
+  const [overtimeId, setOvertimeId] = useState<string | null>(null);
+  const [overtimeHours, setOvertimeHours] = useState("");
   const splits = date ? computeSplits(days, settings).filter((s) => s.entry.date === date) : [];
 
   return (
@@ -64,6 +68,10 @@ export default function EntrySheet({ date, onOpenChange }: EntrySheetProps) {
                 navigate(`/inserisci?copia=${split.entry.id}`);
               }}
               onDelete={() => setDeleteId(split.entry.id)}
+              onOvertime={() => {
+                setOvertimeId(split.entry.id);
+                setOvertimeHours(String((split.entry.manualOvertimeMinutes ?? 0) / 60));
+              }}
             />
           ))}
         </div>
@@ -103,6 +111,51 @@ export default function EntrySheet({ date, onOpenChange }: EntrySheetProps) {
             </DialogFooter>
           </DialogContent>
         </Dialog>
+
+        <Dialog open={overtimeId !== null} onOpenChange={(open) => { if (!open) setOvertimeId(null); }}>
+          <DialogContent className="rounded-2xl" data-testid="overtime-dialog">
+            <DialogHeader>
+              <DialogTitle>Aggiungi straordinario</DialogTitle>
+            </DialogHeader>
+            <div>
+              <Label htmlFor="overtime-hours" className="text-sm font-bold">Ore straordinarie del giorno</Label>
+              <Input
+                id="overtime-hours"
+                inputMode="decimal"
+                className="mt-1 h-12 text-base"
+                placeholder="Es. 2 oppure 1,5"
+                value={overtimeHours}
+                data-testid="input-overtime-hours"
+                onChange={(event) => setOvertimeHours(event.target.value)}
+              />
+              <p className="mt-2 text-xs text-[#64748B]">Puoi usare 1,5 per indicare un'ora e mezza.</p>
+            </div>
+            <DialogFooter className="gap-2">
+              <Button variant="outline" onClick={() => setOvertimeId(null)}>Annulla</Button>
+              <Button
+                data-testid="btn-save-overtime"
+                onClick={() => {
+                  const value = Number(overtimeHours.replace(",", "."));
+                  if (!Number.isFinite(value) || value < 0 || value > 16) {
+                    toast.error("Controlla le ore di straordinario.");
+                    return;
+                  }
+                  const entry = days.find((item) => item.id === overtimeId);
+                  if (!entry) return;
+                  saveEntry({
+                    ...entry,
+                    manualOvertimeMinutes: Math.round(value * 60),
+                    updatedAt: new Date().toISOString(),
+                  });
+                  setOvertimeId(null);
+                  toast.success("Straordinario aggiornato.");
+                }}
+              >
+                Salva straordinario
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
       </SheetContent>
     </Sheet>
   );
@@ -113,11 +166,13 @@ function SplitCard({
   onEdit,
   onCopy,
   onDelete,
+  onOvertime,
 }: {
   split: EntrySplit;
   onEdit: () => void;
   onCopy: () => void;
   onDelete: () => void;
+  onOvertime: () => void;
 }) {
   const e = split.entry;
   const shift =
@@ -150,6 +205,12 @@ function SplitCard({
           {shift?.overnight ? " · turno oltre mezzanotte" : ""}
         </p>
       )}
+      {e.scheduledOrdinaryMinutes !== undefined && (
+        <p className="mt-2 text-sm tabular-nums text-[#4B5563]">
+          {fmtHours(split.ordinary)} ordinarie
+          {(e.manualOvertimeMinutes ?? 0) > 0 ? ` · +${fmtHours(e.manualOvertimeMinutes ?? 0)} straordinario` : ""}
+        </p>
+      )}
       {split.overtime > 0 && (
         <p className="mt-1 text-sm font-bold tabular-nums text-[#D97706]">
           Straordinario +{fmtHours(split.overtime)}
@@ -160,24 +221,37 @@ function SplitCard({
       )}
 
       <div className="mt-3 flex gap-2">
-        <Button
-          variant="outline"
-          className="h-11 flex-1 text-sm font-bold"
-          data-testid={`btn-edit-day-${e.id}`}
-          onClick={onEdit}
-        >
-          <Pencil className="mr-1.5 h-4 w-4" />
-          Modifica
-        </Button>
-        <Button
-          variant="outline"
-          className="h-11 flex-1 text-sm font-bold"
-          data-testid={`btn-copy-day-${e.id}`}
-          onClick={onCopy}
-        >
-          <Copy className="mr-1.5 h-4 w-4" />
-          Duplica
-        </Button>
+        {e.scheduledOrdinaryMinutes !== undefined ? (
+          <Button
+            className="h-11 flex-[2] text-sm font-bold"
+            data-testid={`btn-add-overtime-${e.id}`}
+            onClick={onOvertime}
+          >
+            <Plus className="mr-1.5 h-4 w-4" />
+            Straordinario
+          </Button>
+        ) : (
+          <>
+            <Button
+              variant="outline"
+              className="h-11 flex-1 text-sm font-bold"
+              data-testid={`btn-edit-day-${e.id}`}
+              onClick={onEdit}
+            >
+              <Pencil className="mr-1.5 h-4 w-4" />
+              Modifica
+            </Button>
+            <Button
+              variant="outline"
+              className="h-11 flex-1 text-sm font-bold"
+              data-testid={`btn-copy-day-${e.id}`}
+              onClick={onCopy}
+            >
+              <Copy className="mr-1.5 h-4 w-4" />
+              Duplica
+            </Button>
+          </>
+        )}
         <Button
           variant="outline"
           className="h-11 flex-1 border-[#FECACA] text-sm font-bold text-[#B91C1C] hover:bg-[#FEF2F2]"

@@ -20,6 +20,10 @@ export interface DayEntry {
   /** true/false = manual override, null = auto (Italian holiday list + patronal) */
   festivo: boolean | null;
   note: string;
+  /** Ore ordinarie inserite in blocco dal calendario, senza obbligo di orario. */
+  scheduledOrdinaryMinutes?: number;
+  /** Straordinario aggiunto successivamente a una giornata programmata. */
+  manualOvertimeMinutes?: number;
   createdAt: string;
   updatedAt: string;
 }

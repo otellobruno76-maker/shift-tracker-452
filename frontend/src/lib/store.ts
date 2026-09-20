@@ -50,6 +50,17 @@ export function saveEntry(entry: DayEntry): void {
   emit();
 }
 
+export function saveEntries(entries: DayEntry[]): void {
+  if (entries.length === 0) return;
+  const incoming = new Map(entries.map((entry) => [entry.id, entry]));
+  days = [
+    ...days.map((entry) => incoming.get(entry.id) ?? entry),
+    ...entries.filter((entry) => !days.some((existing) => existing.id === entry.id)),
+  ].sort(byDate);
+  void repo.putDays(entries).catch(() => undefined);
+  emit();
+}
+
 export function deleteEntry(id: string): void {
   days = days.filter((d) => d.id !== id);
   void repo.deleteDay(id).catch(() => undefined);

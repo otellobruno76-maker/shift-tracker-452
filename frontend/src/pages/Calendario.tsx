@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import EntrySheet from "@/components/EntrySheet";
 import MonthNav from "@/components/MonthNav";
+import WeeklySetupDialog from "@/components/WeeklySetupDialog";
 import { currentMonthKey, isoDayList, parseMonthKey, todayISO, weekdayIndex } from "@/lib/dates";
 import { fmtHours } from "@/lib/hours";
 import { holidayName } from "@/lib/holidays";
@@ -60,6 +61,7 @@ export default function Calendario() {
         <div className="mt-3">
           <MonthNav value={selectedMonth} onChange={setSelectedMonth} />
         </div>
+        <WeeklySetupDialog />
       </header>
 
       <div className="mt-3 grid grid-cols-7 gap-1" data-testid="calendar-grid">
