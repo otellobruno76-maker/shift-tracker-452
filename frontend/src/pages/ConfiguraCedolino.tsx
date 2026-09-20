@@ -1,11 +1,12 @@
 import { useRef, useState } from "react";
 import { ChevronLeft, FileSearch, LockKeyhole, Upload } from "lucide-react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { extractDocumentText } from "@/lib/documentText";
 import {
   analyzePayslipText,
@@ -14,9 +15,11 @@ import {
   type DetectedAllowance,
   type PayslipAnalysis,
 } from "@/lib/payslip";
-import { saveSettings } from "@/lib/store";
+import { savePayslip, saveSettings, usePayslips, useSettings } from "@/lib/store";
+import { uid, type PayslipRecord } from "@/lib/types";
 
 interface ReviewState {
+  month: string;
   basePay: string;
   ordinaryHours: string;
   overtimeRates: string;
@@ -26,6 +29,7 @@ interface ReviewState {
   level: string;
   selected: Record<string, boolean>;
   allowances: Array<DetectedAllowance & { selected: boolean; amountText: string }>;
+  totals: Array<{ label: string; value: number }>;
 }
 
 const confidenceStyle: Record<Confidence, string> = {
@@ -38,9 +42,10 @@ function displayNumber(value: number | null): string {
   return value === null ? "" : String(value).replace(".", ",");
 }
 
-function initialReview(analysis: PayslipAnalysis): ReviewState {
+function initialReview(analysis: PayslipAnalysis, month: string): ReviewState {
   const selected = (value: unknown, confidence: Confidence) => value !== null && confidence !== "bassa";
   return {
+    month,
     basePay: displayNumber(analysis.basePay.value),
     ordinaryHours: displayNumber(analysis.ordinaryHours.value),
     overtimeRates: analysis.overtimeRates.map((rate) => displayNumber(rate.value)).join(", "),
@@ -62,6 +67,7 @@ function initialReview(analysis: PayslipAnalysis): ReviewState {
       selected: allowance.confidence !== "bassa",
       amountText: displayNumber(allowance.amount),
     })),
+    totals: analysis.totals.map(({ label, value }) => ({ label, value })),
   };
 }
 
@@ -72,6 +78,11 @@ function parseNumber(value: string): number | null {
 
 export default function ConfiguraCedolino() {
   const navigate = useNavigate();
+  const [params] = useSearchParams();
+  const settings = useSettings();
+  const payslips = usePayslips();
+  const replaceId = params.get("replace");
+  const replaced = payslips.find((item) => item.id === replaceId);
   const fileRef = useRef<HTMLInputElement>(null);
   const [analysis, setAnalysis] = useState<PayslipAnalysis | null>(null);
   const [review, setReview] = useState<ReviewState | null>(null);
@@ -79,6 +90,7 @@ export default function ConfiguraCedolino() {
   const [progress, setProgress] = useState({ label: "", progress: 0 });
   const [error, setError] = useState("");
   const [filename, setFilename] = useState("");
+  const [pendingSettings, setPendingSettings] = useState<Partial<typeof settings> | null>(null);
 
   const analyze = async (file: File) => {
     setBusy(true);
@@ -90,7 +102,7 @@ export default function ConfiguraCedolino() {
       const text = await extractDocumentText(file, setProgress);
       const detected = analyzePayslipText(text);
       setAnalysis(detected);
-      setReview(initialReview(detected));
+      setReview(initialReview(detected, replaced?.month ?? new Date().toISOString().slice(0, 7)));
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Non è stato possibile leggere il documento.");
     } finally {
@@ -134,13 +146,37 @@ export default function ConfiguraCedolino() {
       .filter((item) => item.selected)
       .map((item) => ({ name: item.name, amount: parseNumber(item.amountText) }));
 
-    if (Object.keys(values).length === 1 && values.allowances?.length === 0) {
-      toast.error("Seleziona almeno un dato da applicare.");
+    if (!review.month) {
+      toast.error("Scegli mese e anno del cedolino.");
       return;
     }
-    saveSettings(buildPayslipSettingsPatch(values));
-    toast.success("Dati confermati e applicati alle impostazioni.");
-    navigate("/impostazioni");
+    const existingMonth = payslips.find((item) => item.month === review.month && item.id !== replaced?.id);
+    if (existingMonth) {
+      toast.error("Esiste già un cedolino per questo mese. Aprilo e usa “Sostituisci”.");
+      return;
+    }
+    const now = new Date().toISOString();
+    const record: PayslipRecord = {
+      id: replaced?.id ?? uid(),
+      month: review.month,
+      filename,
+      basePay: chosen.basePay ? parseNumber(review.basePay) : null,
+      ordinaryHours: chosen.ordinaryHours ? parseNumber(review.ordinaryHours) : null,
+      overtimeRates: values.overtimeRates ?? [],
+      nightPct: chosen.nightPct ? parseNumber(review.nightPct) : null,
+      holidayPct: chosen.holidayPct ? parseNumber(review.holidayPct) : null,
+      allowances: values.allowances ?? [],
+      ccnl: chosen.ccnl ? review.ccnl.trim() : "",
+      level: chosen.level ? review.level.trim() : "",
+      totals: review.totals,
+      uploadedAt: replaced?.uploadedAt ?? now,
+      updatedAt: now,
+    };
+    savePayslip(record);
+    const patch = buildPayslipSettingsPatch(values);
+    const changed = Object.entries(patch).some(([key, value]) => key !== "payslipConfiguredAt" && JSON.stringify(settings[key as keyof typeof settings]) !== JSON.stringify(value));
+    if (changed) setPendingSettings(patch);
+    else { toast.success("Cedolino salvato nello storico."); navigate("/cedolini"); }
   };
 
   return (
@@ -150,7 +186,7 @@ export default function ConfiguraCedolino() {
           <ChevronLeft className="h-6 w-6" />
         </Button>
         <div>
-          <h1 className="font-heading text-xl font-extrabold" data-testid="payslip-config-title">Configura da cedolino</h1>
+          <h1 className="font-heading text-xl font-extrabold" data-testid="payslip-config-title">{replaced ? "Sostituisci cedolino" : "Configura da cedolino"}</h1>
           <p className="text-xs text-[#64748B]">Stima automatica con verifica consigliata</p>
         </div>
       </header>
@@ -161,7 +197,7 @@ export default function ConfiguraCedolino() {
           <div>
             <h2 className="font-bold text-[#0C4A6E]">Il documento resta sul dispositivo</h2>
             <p className="mt-1 text-sm leading-relaxed text-[#075985]">
-              L'analisi avviene in questa app. Il cedolino non viene caricato su server esterni e non viene conservato dopo la lettura.
+              L'analisi avviene in questa app. Il cedolino non viene caricato su server esterni. Salviamo solo i dati che confermi, non il PDF o la foto originale.
             </p>
           </div>
         </div>
@@ -225,6 +261,21 @@ export default function ConfiguraCedolino() {
           onConfirm={confirm}
         />
       )}
+      <Dialog open={pendingSettings !== null} onOpenChange={() => undefined}>
+        <DialogContent className="rounded-2xl" data-testid="settings-comparison-dialog">
+          <DialogHeader><DialogTitle>Vuoi aggiornare le impostazioni?</DialogTitle></DialogHeader>
+          <p className="text-sm text-[#64748B]">Il cedolino è già salvato nello storico. Alcuni valori sono diversi da quelli configurati nell’app.</p>
+          {pendingSettings && <div className="max-h-52 space-y-2 overflow-y-auto rounded-xl bg-[#F8FAFC] p-3 text-sm">
+            {pendingSettings.basePay !== undefined && pendingSettings.basePay !== settings.basePay && <p>Paga oraria: <b>{settings.basePay} → {pendingSettings.basePay} €/h</b></p>}
+            {pendingSettings.overtimePct !== undefined && pendingSettings.overtimePct !== settings.overtimePct && <p>Straordinario: <b>{settings.overtimePct}% → {pendingSettings.overtimePct}%</b></p>}
+            {pendingSettings.nightPct !== undefined && pendingSettings.nightPct !== settings.nightPct && <p>Notturno: <b>{settings.nightPct}% → {pendingSettings.nightPct}%</b></p>}
+            {pendingSettings.holidayPct !== undefined && pendingSettings.holidayPct !== settings.holidayPct && <p>Festivo: <b>{settings.holidayPct}% → {pendingSettings.holidayPct}%</b></p>}
+            {pendingSettings.ccnl !== undefined && pendingSettings.ccnl !== settings.ccnl && <p>CCNL: <b>{settings.ccnl || "non impostato"} → {pendingSettings.ccnl}</b></p>}
+            {pendingSettings.contractLevel !== undefined && pendingSettings.contractLevel !== settings.contractLevel && <p>Livello: <b>{settings.contractLevel || "non impostato"} → {pendingSettings.contractLevel}</b></p>}
+          </div>}
+          <DialogFooter className="gap-2"><Button variant="outline" data-testid="btn-keep-settings" onClick={() => { setPendingSettings(null); toast.success("Cedolino salvato. Impostazioni non modificate."); navigate("/cedolini"); }}>No, mantieni attuali</Button><Button data-testid="btn-update-settings" onClick={() => { if (pendingSettings) saveSettings(pendingSettings); setPendingSettings(null); toast.success("Cedolino salvato e impostazioni aggiornate."); navigate("/cedolini"); }}>Sì, aggiorna</Button></DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
@@ -246,7 +297,7 @@ function Review({
   onReplace: () => void;
   onConfirm: () => void;
 }) {
-  const updateValue = (key: keyof Omit<ReviewState, "selected" | "allowances">, value: string) => onChange({ ...review, [key]: value });
+  const updateValue = (key: "basePay" | "ordinaryHours" | "overtimeRates" | "nightPct" | "holidayPct" | "ccnl" | "level", value: string) => onChange({ ...review, [key]: value });
   const updateSelected = (key: string, value: boolean) => onChange({ ...review, selected: { ...review.selected, [key]: value } });
   const sourceForRates = analysis.overtimeRates.length
     ? analysis.overtimeRates.map((rate) => rate.source).join(" · ")
@@ -258,7 +309,8 @@ function Review({
       <section className="rounded-2xl border border-[#E2E5EA] bg-white p-4 shadow-sm">
         <p className="text-xs font-bold uppercase tracking-wide text-[#64748B]">Documento analizzato</p>
         <p className="mt-1 truncate text-sm font-bold">{filename}</p>
-        <p className="mt-2 text-xs text-[#64748B]">Controlla ogni valore. Nulla viene applicato finché non premi “Conferma e applica”.</p>
+        <p className="mt-2 text-xs text-[#64748B]">Controlla ogni valore. Il salvataggio nello storico non modifica automaticamente le impostazioni.</p>
+        <div className="mt-3"><Label htmlFor="payslip-month" className="font-extrabold">Mese e anno</Label><Input id="payslip-month" type="month" className="mt-1 h-12" value={review.month} onChange={(event) => onChange({ ...review, month: event.target.value })} /></div>
       </section>
 
       <ReviewField label="Paga oraria di riferimento" suffix="€/h" value={review.basePay} checked={review.selected.basePay} source={analysis.basePay.source} confidence={analysis.basePay.confidence} onValue={(value) => updateValue("basePay", value)} onChecked={(value) => updateSelected("basePay", value)} />
@@ -303,8 +355,10 @@ function Review({
         )}
       </section>
 
+      <section className="rounded-2xl border border-[#E2E5EA] bg-white p-4 shadow-sm"><h2 className="font-extrabold">Totali rilevabili</h2>{review.totals.length === 0 ? <p className="mt-2 text-sm text-[#64748B]">Non rilevati</p> : <div className="mt-2 space-y-1">{review.totals.map((total, index) => <p key={index} className="text-sm">{total.label}: <b>{total.value.toLocaleString("it-IT")}</b></p>)}</div>}</section>
+
       <div className="space-y-2">
-        <Button className="h-14 w-full text-base font-extrabold" data-testid="btn-apply-payslip" onClick={onConfirm}>Conferma e applica</Button>
+        <Button className="h-14 w-full text-base font-extrabold" data-testid="btn-apply-payslip" onClick={onConfirm}>Salva cedolino</Button>
         <Button variant="outline" className="h-12 w-full" onClick={onReplace}>Scegli un altro documento</Button>
         <Button variant="ghost" className="h-12 w-full" data-testid="btn-cancel-payslip" onClick={onCancel}>Annulla senza modificare</Button>
       </div>
