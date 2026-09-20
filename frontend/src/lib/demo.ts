@@ -8,6 +8,8 @@ export const DEMO_SETTINGS: Settings = {
   ...DEFAULT_SETTINGS,
   workerName: "Mario Rossi",
   company: "Edil Costruzioni S.r.l.",
+  ccnl: "",
+  contractLevel: "",
   basePay: 12.5,
   overtimePct: 25,
   holidayPct: 30,
