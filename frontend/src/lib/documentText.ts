@@ -1,6 +1,7 @@
 import { getDocument, GlobalWorkerOptions } from "pdfjs-dist";
 import pdfWorkerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import { createWorker, OEM } from "tesseract.js";
+import { buildStructuredDocument, type DocumentToken, type StructuredDocument } from "./documentModel";
 
 GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
 
@@ -49,6 +50,23 @@ export function reconstructPdfText(items: PositionedPdfText[]): string {
     .join("\n");
 }
 
+function pdfTokens(items: PositionedPdfText[], page: number): DocumentToken[] {
+  return items.filter((item) => item.str.trim() && item.transform?.length).map((item) => ({
+    text: item.str, page, x: item.transform![4], y: item.transform![5], width: item.width ?? 0,
+    height: Math.abs(item.height ?? item.transform![3] ?? 10), source: "pdf" as const,
+  }));
+}
+
+function ocrTokens(data: unknown, page: number): DocumentToken[] {
+  type OcrWord = { text?: string; bbox?: { x0: number; y0: number; x1: number; y1: number } };
+  const parsed = data as { words?: OcrWord[]; blocks?: Array<{ paragraphs?: Array<{ lines?: Array<{ words?: OcrWord[] }> }> }> };
+  const words = parsed.words ?? parsed.blocks?.flatMap((block) => block.paragraphs?.flatMap((paragraph) => paragraph.lines?.flatMap((line) => line.words ?? []) ?? []) ?? []) ?? [];
+  return words.filter((word) => word.text?.trim() && word.bbox).map((word) => ({
+    text: word.text!, page, x: word.bbox!.x0, y: -word.bbox!.y0,
+    width: word.bbox!.x1 - word.bbox!.x0, height: word.bbox!.y1 - word.bbox!.y0, source: "ocr" as const,
+  }));
+}
+
 function assertFile(file: File): void {
   const supported = file.type === "application/pdf" || file.type.startsWith("image/");
   if (!supported) throw new Error("Formato non supportato. Usa un PDF oppure un'immagine.");
@@ -73,11 +91,21 @@ async function extractImage(file: File, onProgress: (state: ExtractionProgress) 
   onProgress({ label: "Avvio lettura locale…", progress: 0.05 });
   const worker = await createLocalOcr(onProgress);
   try {
-    const result = await worker.recognize(file);
+    const result = await worker.recognize(file, {}, { text: true, blocks: true });
     return result.data.text.trim();
   } finally {
     await worker.terminate();
   }
+}
+
+async function extractImageStructure(file: File, onProgress: (state: ExtractionProgress) => void): Promise<StructuredDocument> {
+  onProgress({ label: "Avvio lettura locale…", progress: 0.05 });
+  const worker = await createLocalOcr(onProgress);
+  try {
+    const result = await worker.recognize(file, {}, { text: true, blocks: true });
+    const tokens = ocrTokens(result.data, 1);
+    return tokens.length ? buildStructuredDocument(tokens) : buildStructuredDocument([{ text: result.data.text, page: 1, x: 0, y: 0, width: 1, height: 10, source: "ocr" }]);
+  } finally { await worker.terminate(); }
 }
 
 async function extractPdf(file: File, onProgress: (state: ExtractionProgress) => void): Promise<string> {
@@ -118,6 +146,31 @@ async function extractPdf(file: File, onProgress: (state: ExtractionProgress) =>
   }
 }
 
+async function extractPdfStructure(file: File, onProgress: (state: ExtractionProgress) => void): Promise<StructuredDocument> {
+  onProgress({ label: "Lettura della struttura del PDF…", progress: 0.05 });
+  const pdf = await getDocument({ data: await file.arrayBuffer() }).promise;
+  const tokens: DocumentToken[] = [];
+  const pagesToRead = Math.min(pdf.numPages, 12);
+  for (let pageNumber = 1; pageNumber <= pagesToRead; pageNumber++) {
+    const page = await pdf.getPage(pageNumber);
+    const content = await page.getTextContent();
+    tokens.push(...pdfTokens(content.items.filter((item): item is typeof item & { str: string } => "str" in item), pageNumber));
+    onProgress({ label: `Lettura pagina ${pageNumber} di ${pagesToRead}…`, progress: pageNumber / pagesToRead });
+  }
+  if (tokens.map((token) => token.text).join("").replace(/\s/g, "").length >= 20) return buildStructuredDocument(tokens);
+  const worker = await createLocalOcr(onProgress);
+  try {
+    for (let pageNumber = 1; pageNumber <= Math.min(pdf.numPages, 3); pageNumber++) {
+      const page = await pdf.getPage(pageNumber); const viewport = page.getViewport({ scale: 1.7 });
+      const canvas = document.createElement("canvas"); canvas.width = Math.ceil(viewport.width); canvas.height = Math.ceil(viewport.height);
+      const context = canvas.getContext("2d"); if (!context) throw new Error("Impossibile preparare la pagina.");
+      await page.render({ canvas, canvasContext: context, viewport }).promise;
+      const result = await worker.recognize(canvas, {}, { text: true, blocks: true }); tokens.push(...ocrTokens(result.data, pageNumber));
+    }
+    return buildStructuredDocument(tokens);
+  } finally { await worker.terminate(); }
+}
+
 export async function extractDocumentText(
   file: File,
   onProgress: (state: ExtractionProgress) => void,
@@ -130,4 +183,11 @@ export async function extractDocumentText(
     throw new Error("Documento non leggibile: prova una foto più nitida o un PDF con testo selezionabile.");
   }
   return text;
+}
+
+export async function extractDocumentStructure(file: File, onProgress: (state: ExtractionProgress) => void): Promise<StructuredDocument> {
+  assertFile(file);
+  const result = file.type === "application/pdf" ? await extractPdfStructure(file, onProgress) : await extractImageStructure(file, onProgress);
+  if (result.text.replace(/\s/g, "").length < 20) throw new Error("Documento non leggibile");
+  return result;
 }

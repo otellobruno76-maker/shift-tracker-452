@@ -6,6 +6,7 @@ export interface DetectedValue<T> {
   value: T | null;
   source: string;
   confidence: Confidence;
+  method?: string;
 }
 
 export interface DetectedRate extends DetectedValue<number> {
@@ -20,6 +21,8 @@ export interface DetectedAllowance {
 }
 
 export interface PayslipAnalysis {
+  adapter?: string;
+  extraFields?: Record<string, DetectedValue<string | number>>;
   qualification: DetectedValue<string>;
   contractCode: DetectedValue<string>;
   partTimePct: DetectedValue<number>;

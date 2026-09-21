@@ -7,9 +7,8 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { extractDocumentText } from "@/lib/documentText";
+import { extractDocumentStructure } from "@/lib/documentText";
 import {
-  analyzePayslipText,
   buildPayslipSettingsPatch,
   emptyPayslipAnalysis,
   estimatedDailyValue,
@@ -17,6 +16,7 @@ import {
   type Confidence,
   type PayslipAnalysis,
 } from "@/lib/payslip";
+import { analyzeStructuredPayslip } from "@/lib/payslipStructured";
 import { initialReview, updateReviewValue, type ReviewState } from "@/lib/payslipReview";
 import { savePayslip, saveSettings, usePayslips, useSettings } from "@/lib/store";
 import { uid, type PayslipRecord } from "@/lib/types";
@@ -56,8 +56,8 @@ export default function ConfiguraCedolino() {
     setReview(null);
     setFilename(file.name);
     try {
-      const text = await extractDocumentText(file, setProgress);
-      const detected = analyzePayslipText(text);
+      const document = await extractDocumentStructure(file, setProgress);
+      const detected = analyzeStructuredPayslip(document);
       setAnalysis(detected);
       setReview(initialReview(detected, replaced?.month ?? new Date().toISOString().slice(0, 7), settings.dailyOrdinaryHours));
     } catch {
