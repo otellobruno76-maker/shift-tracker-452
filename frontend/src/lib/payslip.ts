@@ -101,14 +101,57 @@ function firstNumberAfter(lines: string[], label: RegExp, min: number, max: numb
     const matchLabel = line.match(label);
     if (!matchLabel || matchLabel.index === undefined) continue;
     const tail = line.slice(matchLabel.index + matchLabel[0].length).replace(/^\s*[:|=-]?\s*/, "");
-    const candidates = [...tail.matchAll(/(?:€\s*)?(\d{1,6}(?:\.\d{3})*(?:,\d{1,4})?|\d{1,6}(?:[.,]\d{1,4})?)/g)];
+    const candidates = [...tail.matchAll(/(?:€\s*)?(\d{1,6}(?:\.\d{3})*(?:,\d{1,6})?|\d{1,6}(?:[.,]\d{1,6})?)/g)];
     const value = candidates.length ? numberIt(candidates[0][1]) : null;
     if (value !== null && value >= min && value <= max) {
       const confused = line.length > 150 || candidates.length > 5;
       return { value, source: compact(line), confidence: confused ? "bassa" : candidates.length === 1 ? "alta" : "media" };
     }
   }
+  for (let index = 0; index < lines.length - 1; index++) {
+    if (!label.test(lines[index]) || /\d/.test(lines[index])) continue;
+    const next = cells(lines[index + 1]);
+    if (next.length !== 1) continue;
+    const value = numberIt(next[0]);
+    if (value !== null && value >= min && value <= max) {
+      return { value, source: `${compact(lines[index])} → ${compact(lines[index + 1])}`, confidence: "media" };
+    }
+  }
   return missingNumber();
+}
+
+function hourlyBaseCandidate(lines: string[]): DetectedValue<number> {
+  const candidates: Array<{ value: number; source: string; header: string }> = [];
+  const rateHeader = /dato\s*base|tariffa(?:\s*oraria)?|paga\s*oraria|retribuzione\s*oraria|valore\s*unitario/i;
+  const hourlyMeaning = /\b(ore?|h)\b|ferie|festivit[aà]|permess|straordinar|notturn|malattia/i;
+  for (let index = 0; index < lines.length; index++) {
+    const headers = cells(lines[index]);
+    const rateColumn = headers.findIndex((cell) => rateHeader.test(cell));
+    if (rateColumn < 0 || headers.length < 2) continue;
+    for (let row = index + 1; row < lines.length; row++) {
+      const values = cells(lines[row]);
+      if (values.length < 2) break;
+      if (values.some((cell) => rateHeader.test(cell))) break;
+      const rowText = values.join(" ");
+      if (!hourlyMeaning.test(rowText)) continue;
+      const value = numberIt(values[rateColumn] ?? "");
+      if (value !== null && value >= 1 && value <= 200) {
+        candidates.push({ value, source: compact(lines[row]), header: headers[rateColumn] });
+      }
+    }
+  }
+  const groups = new Map<string, Array<{ value: number; source: string; header: string }>>();
+  for (const candidate of candidates) {
+    const key = candidate.value.toFixed(5);
+    groups.set(key, [...(groups.get(key) ?? []), candidate]);
+  }
+  const best = [...groups.values()].sort((a, b) => b.length - a.length)[0];
+  if (!best) return missingNumber();
+  return {
+    value: best[0].value,
+    source: `${best[0].header} in ${best.length} ${best.length > 1 ? "voci orarie coerenti" : "voce oraria"}: ${best.map((item) => item.source).join(" · ")}`,
+    confidence: best.length >= 2 ? "media" : "bassa",
+  };
 }
 
 export function calculateIncreasePct(baseRate: number, increasedRate: number): number | null {
@@ -153,30 +196,7 @@ export function analyzePayslipText(rawText: string): PayslipAnalysis {
   const overtimeHours = firstNumberAfter(lines, /ore\s*straordinarie|straordinario\s*ore/i, 0, 250);
 
   if (basePay.value === null) {
-    const candidates: Array<{ value: number; source: string }> = [];
-    for (let index = 0; index < lines.length; index++) {
-      const headers = cells(lines[index]);
-      const baseColumn = headers.findIndex((cell) => /dato\s*base/i.test(cell));
-      if (baseColumn < 0) continue;
-      for (let row = index + 1; row < Math.min(lines.length, index + 16); row++) {
-        const values = cells(lines[row]);
-        if (values.some((cell) => /dato\s*base/i.test(cell))) break;
-        if (!/(ferie|festivit[aà]|permess).*(ore)|ore.*(ferie|festivit[aà]|permess)/i.test(values.join(" "))) continue;
-        const value = numberIt(values[baseColumn] ?? "");
-        if (value !== null && value >= 1 && value <= 200) candidates.push({ value, source: compact(lines[row]) });
-      }
-    }
-    const groups = new Map<string, Array<{ value: number; source: string }>>();
-    for (const candidate of candidates) {
-      const key = candidate.value.toFixed(5);
-      groups.set(key, [...(groups.get(key) ?? []), candidate]);
-    }
-    const repeated = [...groups.values()].sort((a, b) => b.length - a.length)[0];
-    if (repeated?.length >= 2) basePay = {
-      value: repeated[0].value,
-      source: `Dato Base ripetuto in ${repeated.length} voci orarie: ${repeated.map((item) => item.source).join(" · ")}`,
-      confidence: "media",
-    };
+    basePay = hourlyBaseCandidate(lines);
   }
 
   const overtimeRates: DetectedRate[] = [];
@@ -237,6 +257,9 @@ export function analyzePayslipText(rawText: string): PayslipAnalysis {
 
   let ccnl = missingText();
   let level = tableValue(employmentTable, /^livello$/i);
+  if (level.value && /^(contratto|livello|qualifica|tipo\s*rapporto|part.?time)$/i.test(level.value)) {
+    level = missingText();
+  }
   for (const line of lines) {
     if (ccnl.value === null) {
       const match = line.match(/CCNL\s*[:-]?\s*(.{3,70})/i);
@@ -250,7 +273,7 @@ export function analyzePayslipText(rawText: string): PayslipAnalysis {
 
   const totals: Array<{ label: string; value: number; source: string }> = [];
   for (const line of lines) {
-    const match = line.match(/(totale\s+(?:competenze|ritenute|lordo|netto|ore)|netto\s+(?:(?:in\s+)?busta|a\s+pagare))[^\d]{0,20}(\d{1,3}(?:\.\d{3})*(?:,\d{1,2})?|\d+(?:[.,]\d{1,2})?)/i);
+    const match = line.match(/(totale\s+(?:competenze|ritenute|lordo|netto|ore)|lordo(?:\s+totale)?|netto\s+(?:(?:in\s+)?busta|a\s+pagare))[^\d]{0,20}(\d{1,3}(?:\.\d{3})*(?:,\d{1,2})?|\d+(?:[.,]\d{1,2})?)/i);
     const value = match ? numberIt(match[2]) : null;
     if (match && value !== null) totals.push({ label: compact(match[1]), value, source: compact(line) });
   }

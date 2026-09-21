@@ -80,7 +80,7 @@ describe("calcolo maggiorazioni dal cedolino", () => {
     expect(result.workedHours.value).toBe(112.5);
     expect(result.workedDays.value).toBe(18);
     expect(result.basePay).toMatchObject({ value: 8.2826, confidence: "media" });
-    expect(result.basePay.source).toContain("Dato Base ripetuto");
+    expect(result.basePay.source).toContain("2 voci orarie coerenti");
     expect(result.dailyPay.value).toBeNull();
     expect(result.totals.map((item) => item.label.toLocaleLowerCase())).toEqual([
       "totale competenze", "totale ritenute", "netto a pagare",
