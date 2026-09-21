@@ -4,6 +4,8 @@ import { Toaster } from "@/components/ui/sonner";
 import BottomNav from "@/components/BottomNav";
 import { hydrateAndSeed } from "@/lib/store";
 import Calendario from "@/pages/Calendario";
+import ConfiguraCedolino from "@/pages/ConfiguraCedolino";
+import Cedolini from "@/pages/Cedolini";
 import Impostazioni from "@/pages/Impostazioni";
 import InserisciGiornata from "@/pages/InserisciGiornata";
 import Oggi from "@/pages/Oggi";
@@ -14,7 +16,7 @@ export default function App() {
     void hydrateAndSeed();
   }, []);
   const { pathname } = useLocation();
-  const formMode = pathname.startsWith("/inserisci");
+  const formMode = pathname.startsWith("/inserisci") || pathname.startsWith("/configura-cedolino") || pathname.startsWith("/cedolini");
 
   return (
     <div className="min-h-svh bg-[#F4F5F8] text-[#0F172A]">
@@ -25,6 +27,8 @@ export default function App() {
           <Route path="/riepilogo" element={<Riepilogo />} />
           <Route path="/impostazioni" element={<Impostazioni />} />
           <Route path="/inserisci" element={<InserisciGiornata />} />
+          <Route path="/configura-cedolino" element={<ConfiguraCedolino />} />
+          <Route path="/cedolini" element={<Cedolini />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </div>

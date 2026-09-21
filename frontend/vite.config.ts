@@ -1,5 +1,6 @@
 import path from "node:path";
-import { defineConfig, type UserConfig } from "vite";
+import { copyFileSync, createReadStream, mkdirSync } from "node:fs";
+import { defineConfig, type Plugin, type UserConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import { visualEdits } from "@emergentbase/visual-edits/vite";
@@ -13,6 +14,39 @@ const visualEditsDisabled = process.env.DISABLE_VISUAL_EDITS === "true";
 
 // Branded error overlay (build + runtime errors); escape hatch mirrors the two above.
 const emergentOverlayDisabled = process.env.DISABLE_EMERGENT_OVERLAY === "true";
+
+const localOcrFiles = {
+  "/ocr/worker.min.js": "node_modules/tesseract.js/dist/worker.min.js",
+  "/ocr/tesseract-core-simd-lstm.wasm.js": "node_modules/tesseract.js-core/tesseract-core-simd-lstm.wasm.js",
+  "/ocr/ita.traineddata.gz": "node_modules/@tesseract.js-data/ita/4.0.0_best_int/ita.traineddata.gz",
+} as const;
+
+function localOcrAssets(): Plugin {
+  const serve = () => (request: { url?: string }, response: NodeJS.WritableStream & { setHeader: (key: string, value: string) => void }, next: () => void) => {
+    const source = localOcrFiles[request.url?.split("?")[0] as keyof typeof localOcrFiles];
+    if (!source) return next();
+    response.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+    createReadStream(path.resolve(__dirname, source)).pipe(response);
+  };
+
+  return {
+    name: "local-ocr-assets",
+    configureServer(server) {
+      server.middlewares.use(serve());
+    },
+    configurePreviewServer(server) {
+      server.middlewares.use(serve());
+    },
+    writeBundle(options) {
+      const outputDir = path.resolve(__dirname, typeof options.dir === "string" ? options.dir : "dist");
+      const targetDir = path.join(outputDir, "ocr");
+      mkdirSync(targetDir, { recursive: true });
+      for (const [url, source] of Object.entries(localOcrFiles)) {
+        copyFileSync(path.resolve(__dirname, source), path.join(outputDir, url.slice(1)));
+      }
+    },
+  };
+}
 
 // Fails open: a broken overlay package must degrade to "no overlay" (Vite's own overlay
 // takes over), never to "no dev server". Never let a preview aid take the app down.
@@ -40,6 +74,7 @@ export default defineConfig(async () => {
     plugins: [
       react(),
       tailwindcss(),
+      localOcrAssets(),
       ...(visualEditsDisabled ? [] : [visualEdits()]),
       // No isServe guard: this factory takes no ConfigEnv arg, so build purity here rests
       // on the package's own `apply: "serve"`.

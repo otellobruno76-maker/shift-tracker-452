@@ -1,19 +1,42 @@
 import { useMemo, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
-import { BedDouble, ChevronLeft, Coffee, Hammer, Palmtree, Thermometer } from "lucide-react";
+import {
+  BedDouble,
+  BookmarkPlus,
+  ChevronLeft,
+  Coffee,
+  Hammer,
+  Palmtree,
+  Thermometer,
+  Trash2,
+} from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { fmtDateIt, toISODate, todayISO } from "@/lib/dates";
 import { computeShift, fmtHours, nightWindowMinutes } from "@/lib/hours";
 import { holidayName } from "@/lib/holidays";
-import { saveEntry, useDays, useSettings } from "@/lib/store";
+import {
+  deleteDayTemplate,
+  saveDayTemplate,
+  saveEntry,
+  useDays,
+  useDayTemplates,
+  useSettings,
+} from "@/lib/store";
 import { BREAK_PRESETS, DAY_TYPES, DAY_TYPE_LABELS, uid } from "@/lib/types";
-import type { DayEntry, DayType } from "@/lib/types";
+import type { DayEntry, DayTemplate, DayType } from "@/lib/types";
 
 const TYPE_ICONS: Record<DayType, LucideIcon> = {
   lavoro: Hammer,
@@ -51,6 +74,7 @@ function FormBody({
   prefillDate: string | null;
 }) {
   const days = useDays();
+  const templates = useDayTemplates();
   const settings = useSettings();
   const navigate = useNavigate();
 
@@ -74,6 +98,11 @@ function FormBody({
   const [festivoManual, setFestivoManual] = useState(source ? source.festivo === true : false);
   const [festivoTouched, setFestivoTouched] = useState(source !== undefined && source.festivo !== null);
   const [note, setNote] = useState(source?.note ?? "");
+  const scheduledMode = Boolean(editId && source?.scheduledOrdinaryMinutes !== undefined);
+  const [scheduledHours, setScheduledHours] = useState(String((source?.scheduledOrdinaryMinutes ?? settings.dailyOrdinaryHours * 60) / 60));
+  const [scheduledOvertime, setScheduledOvertime] = useState(String((source?.manualOvertimeMinutes ?? 0) / 60));
+  const [templateDialogOpen, setTemplateDialogOpen] = useState(false);
+  const [templateName, setTemplateName] = useState("");
 
   const breakMinutes =
     breakChoice === "custom" ? (Number(breakCustom.replace(",", ".")) || 0) : Number(breakChoice);
@@ -88,12 +117,77 @@ function FormBody({
   const dailyLimit = Math.max(0, settings.dailyOrdinaryHours) * 60;
   const ordinaryPreview = net !== null ? Math.min(net, dailyLimit) : 0;
 
+  const applyTemplate = (template: DayTemplate) => {
+    setDayType(template.dayType);
+    setStart(template.start);
+    setEnd(template.end);
+    if (BREAK_PRESETS.includes(template.breakMinutes)) {
+      setBreakChoice(String(template.breakMinutes));
+      setBreakCustom("");
+    } else {
+      setBreakChoice("custom");
+      setBreakCustom(String(template.breakMinutes));
+    }
+    setNotturnoManual(template.notturno);
+    setNotturnoTouched(true);
+    setReperibilita(template.reperibilita);
+    setTrasferta(template.trasferta);
+    setNote(template.note);
+    toast.success(`Giornata tipo “${template.name}” applicata.`);
+  };
+
+  const openTemplateDialog = () => {
+    if (dayType === "lavoro" && (!start || !end || !shift || shift.net <= 0)) {
+      toast.error("Inserisci un turno valido prima di salvarlo come giornata tipo.");
+      return;
+    }
+    setTemplateName("");
+    setTemplateDialogOpen(true);
+  };
+
+  const persistTemplate = () => {
+    const name = templateName.trim();
+    if (!name) {
+      toast.error("Dai un nome alla giornata tipo.");
+      return;
+    }
+    const now = new Date().toISOString();
+    const existing = templates.find((item) => item.name.toLocaleLowerCase("it") === name.toLocaleLowerCase("it"));
+    saveDayTemplate({
+      id: existing?.id ?? uid(),
+      name,
+      dayType,
+      start: dayType === "lavoro" ? start : "",
+      end: dayType === "lavoro" ? end : "",
+      breakMinutes: dayType === "lavoro" ? Math.max(0, breakMinutes) : 0,
+      notturno: dayType === "lavoro" ? notturno : false,
+      reperibilita: dayType === "lavoro" ? reperibilita : false,
+      trasferta: dayType === "lavoro" ? trasferta : false,
+      note: note.trim(),
+      createdAt: existing?.createdAt ?? now,
+      updatedAt: now,
+    });
+    setTemplateDialogOpen(false);
+    toast.success(existing ? "Giornata tipo aggiornata." : "Giornata tipo salvata.");
+  };
+
   const save = () => {
     if (!date) {
       toast.error("Scegli la data della giornata.");
       return;
     }
-    if (dayType === "lavoro") {
+    if (dayType === "lavoro" && scheduledMode) {
+      const ordinary = Number(scheduledHours.replace(",", "."));
+      const overtime = Number(scheduledOvertime.replace(",", "."));
+      if (!Number.isFinite(ordinary) || ordinary <= 0 || ordinary > 24) {
+        toast.error("Controlla le ore ordinarie.");
+        return;
+      }
+      if (!Number.isFinite(overtime) || overtime < 0 || overtime > 16) {
+        toast.error("Controlla le ore straordinarie.");
+        return;
+      }
+    } else if (dayType === "lavoro") {
       if (!start) {
         toast.error("Inserisci l'ora di inizio.");
         return;
@@ -131,6 +225,12 @@ function FormBody({
       trasferta: dayType === "lavoro" ? trasferta : false,
       festivo: festivoTouched ? festivo : null,
       note: note.trim(),
+      scheduledOrdinaryMinutes: dayType === "lavoro" && scheduledMode
+        ? Math.round(Number(scheduledHours.replace(",", ".")) * 60)
+        : undefined,
+      manualOvertimeMinutes: dayType === "lavoro" && scheduledMode
+        ? Math.round(Number(scheduledOvertime.replace(",", ".")) * 60)
+        : undefined,
       createdAt: source && editId ? source.createdAt : now,
       updatedAt: now,
     };
@@ -168,6 +268,67 @@ function FormBody({
           Stai copiando la giornata del {fmtDateIt(source.date)}: cambia la data e salva.
         </p>
       )}
+
+      <section
+        className="mt-4 rounded-2xl border border-[#BAE6FD] bg-[#F0F9FF] p-4"
+        data-testid="day-templates-section"
+      >
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <h2 className="font-heading text-base font-extrabold">Giornate tipo</h2>
+            <p className="text-xs text-[#4B5563]">Richiama un turno abituale con un tocco.</p>
+          </div>
+          <Button
+            type="button"
+            variant="outline"
+            className="h-11 shrink-0 border-[#7DD3FC] bg-white px-3 text-sm font-bold"
+            data-testid="btn-save-day-template"
+            onClick={openTemplateDialog}
+          >
+            <BookmarkPlus className="mr-1.5 h-4 w-4" />
+            Salva tipo
+          </Button>
+        </div>
+        {templates.length === 0 ? (
+          <p className="mt-3 rounded-xl bg-white/80 p-3 text-sm text-[#64748B]" data-testid="day-templates-empty">
+            Nessuna giornata tipo salvata. Compila un turno e premi “Salva tipo”.
+          </p>
+        ) : (
+          <div className="mt-3 space-y-2" data-testid="day-templates-list">
+            {templates.map((template) => (
+              <div key={template.id} className="flex items-center gap-2">
+                <button
+                  type="button"
+                  className="min-w-0 flex-1 rounded-xl border border-[#BAE6FD] bg-white px-3 py-2.5 text-left"
+                  data-testid={`apply-day-template-${template.id}`}
+                  onClick={() => applyTemplate(template)}
+                >
+                  <span className="block truncate text-sm font-extrabold">{template.name}</span>
+                  <span className="block text-xs tabular-nums text-[#64748B]">
+                    {template.dayType === "lavoro"
+                      ? `${template.start}–${template.end} · pausa ${template.breakMinutes} min`
+                      : DAY_TYPE_LABELS[template.dayType]}
+                  </span>
+                </button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="icon"
+                  className="h-11 w-11 shrink-0 border-[#FECACA] text-[#B91C1C]"
+                  aria-label={`Elimina ${template.name}`}
+                  data-testid={`delete-day-template-${template.id}`}
+                  onClick={() => {
+                    deleteDayTemplate(template.id);
+                    toast.success("Giornata tipo eliminata.");
+                  }}
+                >
+                  <Trash2 className="h-4 w-4" />
+                </Button>
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
 
       <div className="mt-4">
         <Label className="text-sm font-bold">Tipo di giornata</Label>
@@ -230,7 +391,25 @@ function FormBody({
         </div>
       </div>
 
-      {dayType === "lavoro" && (
+      {dayType === "lavoro" && scheduledMode && (
+        <>
+          <section className="mt-4 rounded-2xl border border-[#BAE6FD] bg-[#F0F9FF] p-4" data-testid="scheduled-day-editor">
+            <h2 className="font-heading text-base font-extrabold">Giornata precompilata</h2>
+            <p className="mt-1 text-xs text-[#475569]">Modifica solo l’eccezione di questo giorno.</p>
+            <div className="mt-3 grid grid-cols-2 gap-3">
+              <div><Label htmlFor="scheduled-hours">Ore ordinarie</Label><Input id="scheduled-hours" inputMode="decimal" className="mt-1 h-12 text-base" value={scheduledHours} onChange={(event) => setScheduledHours(event.target.value)} /></div>
+              <div><Label htmlFor="scheduled-overtime">Straordinario</Label><Input id="scheduled-overtime" inputMode="decimal" className="mt-1 h-12 text-base" value={scheduledOvertime} onChange={(event) => setScheduledOvertime(event.target.value)} /></div>
+            </div>
+          </section>
+          <div className="mt-4 space-y-2" data-testid="flag-section">
+            <FlagRow label="Giorno festivo" checked={festivo} onCheckedChange={(v) => { setFestivoTouched(true); setFestivoManual(v); }} testid="flag-festivo" />
+            <FlagRow label="Reperibilità" checked={reperibilita} onCheckedChange={setReperibilita} testid="flag-reperibilita" />
+            <FlagRow label="Trasferta" checked={trasferta} onCheckedChange={setTrasferta} testid="flag-trasferta" />
+          </div>
+        </>
+      )}
+
+      {dayType === "lavoro" && !scheduledMode && (
         <>
           <div className="mt-4 grid grid-cols-2 gap-3">
             <div>
@@ -411,6 +590,40 @@ function FormBody({
           </Button>
         </div>
       </div>
+
+      <Dialog open={templateDialogOpen} onOpenChange={setTemplateDialogOpen}>
+        <DialogContent className="rounded-2xl" data-testid="save-template-dialog">
+          <DialogHeader>
+            <DialogTitle>Salva giornata tipo</DialogTitle>
+          </DialogHeader>
+          <div>
+            <Label htmlFor="template-name" className="text-sm font-bold">Nome</Label>
+            <Input
+              id="template-name"
+              autoFocus
+              className="mt-1 h-12 text-base"
+              placeholder="Es. Turno lungo"
+              value={templateName}
+              data-testid="input-template-name"
+              onChange={(event) => setTemplateName(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") persistTemplate();
+              }}
+            />
+            <p className="mt-2 text-xs text-[#64748B]">
+              Salva orari, pausa e opzioni. La data e lo stato festivo non vengono copiati.
+            </p>
+          </div>
+          <DialogFooter className="gap-2">
+            <Button type="button" variant="outline" onClick={() => setTemplateDialogOpen(false)}>
+              Annulla
+            </Button>
+            <Button type="button" data-testid="btn-confirm-save-template" onClick={persistTemplate}>
+              Salva
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

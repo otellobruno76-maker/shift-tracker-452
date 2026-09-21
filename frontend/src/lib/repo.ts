@@ -1,7 +1,7 @@
 // Promise wrapper over IndexedDB — the ONLY persistence layer of the app
 // (local-first: no backend, no cloud). A future cloud-sync feature can hook
 // the same interface without touching any UI code.
-import type { DayEntry, Settings } from "./types";
+import type { DayEntry, DayTemplate, PayslipRecord, Settings } from "./types";
 
 const DB_NAME = "registro-ore-lavoro";
 const DB_VERSION = 1;
@@ -87,6 +87,30 @@ export const repo = {
   },
   async putSettings(settings: Settings): Promise<void> {
     await withStore(STORE_KV, "readwrite", (s) => s.put(settings, "settings"));
+  },
+  async getDayTemplates(): Promise<DayTemplate[]> {
+    try {
+      const value = await withStore<DayTemplate[]>(STORE_KV, "readonly", (s) =>
+        s.get("dayTemplates"),
+      );
+      return Array.isArray(value) ? value : [];
+    } catch {
+      return [];
+    }
+  },
+  async putDayTemplates(templates: DayTemplate[]): Promise<void> {
+    await withStore(STORE_KV, "readwrite", (s) => s.put(templates, "dayTemplates"));
+  },
+  async getPayslips(): Promise<PayslipRecord[]> {
+    try {
+      const value = await withStore<PayslipRecord[]>(STORE_KV, "readonly", (s) => s.get("payslips"));
+      return (value ?? []).slice().sort((a, b) => b.month.localeCompare(a.month));
+    } catch {
+      return [];
+    }
+  },
+  async putPayslips(payslips: PayslipRecord[]): Promise<void> {
+    await withStore(STORE_KV, "readwrite", (s) => s.put(payslips, "payslips"));
   },
   async getMeta(key: string): Promise<unknown> {
     try {

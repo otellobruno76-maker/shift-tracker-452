@@ -1,10 +1,12 @@
 import { useEffect, useRef, useState } from "react";
-import { Trash2, Upload } from "lucide-react";
+import { FileSearch, Files, Trash2, Upload } from "lucide-react";
+import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import {
   Select,
   SelectContent,
@@ -15,15 +17,18 @@ import {
 import { fmtDateIt } from "@/lib/dates";
 import { exportBackupFile, importBackupFile } from "@/lib/export";
 import { nationalHolidays } from "@/lib/holidays";
-import { removeDemoData, saveSettings, useDemoActive, useSettings } from "@/lib/store";
+import { clearRegister, removeDemoData, saveSettings, useDemoActive, useSettings } from "@/lib/store";
 import { MONTHS_IT } from "@/lib/types";
 import type { ReactNode } from "react";
 
 export default function Impostazioni() {
+  const navigate = useNavigate();
   const settings = useSettings();
   const demo = useDemoActive();
   const fileRef = useRef<HTMLInputElement>(null);
   const thisYear = new Date().getFullYear();
+  const [clearDialogOpen, setClearDialogOpen] = useState(false);
+  const [clearStep, setClearStep] = useState<1 | 2>(1);
 
   return (
     <div>
@@ -54,6 +59,44 @@ export default function Impostazioni() {
           value={settings.company}
           onCommit={(v) => saveSettings({ company: v })}
         />
+        <TextField label="CCNL (facoltativo)" placeholder="Es. Metalmeccanica Industria" testid="settings-ccnl" value={settings.ccnl} onCommit={(v) => saveSettings({ ccnl: v })} />
+        <TextField label="Livello (facoltativo)" placeholder="Es. C2" testid="settings-contract-level" value={settings.contractLevel} onCommit={(v) => saveSettings({ contractLevel: v })} />
+      </Section>
+
+      <Section title="Configura da cedolino" testid="settings-payslip-config">
+        <p className="text-sm leading-relaxed text-[#4B5563]">
+          Leggi localmente un PDF o una foto della busta paga, controlla i dati rilevati e scegli cosa applicare.
+        </p>
+        <Button
+          className="h-14 w-full text-base font-extrabold"
+          data-testid="btn-configure-from-payslip"
+          onClick={() => navigate("/configura-cedolino")}
+        >
+          <FileSearch className="mr-2 h-5 w-5" />
+          Analizza un cedolino
+        </Button>
+        <Button
+          variant="outline"
+          className="h-14 w-full text-base font-extrabold"
+          data-testid="btn-my-payslips"
+          onClick={() => navigate("/cedolini")}
+        >
+          <Files className="mr-2 h-5 w-5" />
+          I miei cedolini
+        </Button>
+        {settings.payslipConfiguredAt && (
+          <div className="rounded-xl bg-[#F0FDF4] p-3 text-sm text-[#166534]" data-testid="payslip-applied-summary">
+            <p className="font-extrabold">Ultimi dati confermati</p>
+            <div className="mt-1 space-y-0.5">
+              {settings.ccnl && <p>CCNL: {settings.ccnl}</p>}
+              {settings.contractLevel && <p>Livello: {settings.contractLevel}</p>}
+              {settings.overtimeRates.length > 0 && <p>Straordinari: {settings.overtimeRates.map((rate) => `+${rate}%`).join(", ")}</p>}
+              {settings.payslipReferenceHours !== null && <p>Ore indicate sul cedolino: {settings.payslipReferenceHours}</p>}
+              {settings.payslipAllowances.length > 0 && <p>Indennità rilevate: {settings.payslipAllowances.map((item) => item.name).join(", ")}</p>}
+            </div>
+          </div>
+        )}
+        <p className="text-xs text-[#64748B]">Il documento non viene salvato né inviato a servizi esterni. I risultati sono una stima: verifica consigliata.</p>
       </Section>
 
       <Section title="Orario ordinario" testid="settings-schedule">
@@ -303,11 +346,31 @@ export default function Impostazioni() {
             Rimuovi dati di prova
           </Button>
         )}
+        <Button
+          variant="outline"
+          className="h-14 w-full border-[#FECACA] text-base font-extrabold text-[#B91C1C] hover:bg-[#FEF2F2]"
+          data-testid="btn-clear-register"
+          onClick={() => { setClearStep(1); setClearDialogOpen(true); }}
+        >
+          <Trash2 className="mr-2 h-5 w-5" />
+          Azzera registro
+        </Button>
         <p className="text-xs text-[#64748B]">
           I tuoi dati restano solo su questo dispositivo: nessun account, nessun cloud. Per
           spostarli su un altro telefono usa Esporta/Importa backup.
         </p>
       </Section>
+
+      <Dialog open={clearDialogOpen} onOpenChange={(open) => { setClearDialogOpen(open); if (!open) setClearStep(1); }}>
+        <DialogContent className="rounded-2xl" data-testid="clear-register-dialog">
+          <DialogHeader><DialogTitle>{clearStep === 1 ? "Azzerare tutto il registro ore?" : "Conferma definitiva"}</DialogTitle></DialogHeader>
+          <p className="text-sm text-[#64748B]">{clearStep === 1 ? "Saranno eliminate tutte le giornate. Impostazioni, paga, CCNL e Giornate tipo resteranno salvati." : "Questa operazione elimina definitivamente tutte le giornate registrate. Vuoi procedere?"}</p>
+          <DialogFooter className="gap-2">
+            <Button variant="outline" onClick={() => setClearDialogOpen(false)}>Annulla</Button>
+            {clearStep === 1 ? <Button variant="destructive" data-testid="btn-confirm-clear-register" onClick={() => setClearStep(2)}>Continua</Button> : <Button variant="destructive" data-testid="btn-confirm-clear-register-final" onClick={() => { clearRegister(); setClearDialogOpen(false); setClearStep(1); toast.success("Registro azzerato. Configurazioni mantenute."); }}>Azzera definitivamente</Button>}
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

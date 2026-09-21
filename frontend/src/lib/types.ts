@@ -20,7 +20,49 @@ export interface DayEntry {
   /** true/false = manual override, null = auto (Italian holiday list + patronal) */
   festivo: boolean | null;
   note: string;
+  /** Ore ordinarie inserite in blocco dal calendario, senza obbligo di orario. */
+  scheduledOrdinaryMinutes?: number;
+  /** Straordinario aggiunto successivamente a una giornata programmata. */
+  manualOvertimeMinutes?: number;
   createdAt: string;
+  updatedAt: string;
+}
+
+/** A reusable shift preset. Dates and calculated holiday state are deliberately excluded. */
+export interface DayTemplate {
+  id: string;
+  name: string;
+  dayType: DayType;
+  start: string;
+  end: string;
+  breakMinutes: number;
+  notturno: boolean;
+  reperibilita: boolean;
+  trasferta: boolean;
+  note: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface PayslipRecord {
+  id: string;
+  /** Mese di competenza in formato YYYY-MM. */
+  month: string;
+  filename: string;
+  basePay: number | null;
+  dailyPay?: number | null;
+  monthlyPay?: number | null;
+  ordinaryHours: number | null;
+  overtimeHours?: number | null;
+  overtimeTariffs?: number[];
+  overtimeRates: number[];
+  nightPct: number | null;
+  holidayPct: number | null;
+  allowances: Array<{ name: string; amount: number | null }>;
+  ccnl: string;
+  level: string;
+  totals: Array<{ label: string; value: number }>;
+  uploadedAt: string;
   updatedAt: string;
 }
 
@@ -52,6 +94,13 @@ export interface Settings {
   patronalName: string;
   patronalMonth: number | null;
   patronalDay: number | null;
+  /** Dati facoltativi confermati dall'utente dopo la lettura locale del cedolino. */
+  overtimeRates: number[];
+  payslipReferenceHours: number | null;
+  ccnl: string;
+  contractLevel: string;
+  payslipAllowances: Array<{ name: string; amount: number | null }>;
+  payslipConfiguredAt: string | null;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -72,6 +121,12 @@ export const DEFAULT_SETTINGS: Settings = {
   patronalName: "",
   patronalMonth: null,
   patronalDay: null,
+  overtimeRates: [],
+  payslipReferenceHours: null,
+  ccnl: "",
+  contractLevel: "",
+  payslipAllowances: [],
+  payslipConfiguredAt: null,
 };
 
 export const DAY_TYPE_LABELS: Record<DayType, string> = {
