@@ -1,0 +1,77 @@
+import { emptyPayslipAnalysis, type Confidence, type DetectedValue, type PayslipAnalysis } from "./payslip";
+
+export interface AIFieldEvidence { confidence: "high" | "medium" | "low"; evidence: string }
+export interface PayslipAIResult {
+  month: number | null; year: number | null; qualification: string | null; level: string | null;
+  ccnl: string | null; contract_code: string | null; employment_type: string | null; part_time_pct: number | null;
+  pay_type: "hourly" | "daily" | "monthly" | "unknown"; hourly_pay: number | null; daily_pay: number | null;
+  monthly_pay: number | null; ordinary_hours: number | null; worked_hours: number | null; worked_days: number | null;
+  overtime_hours: number | null; overtime_rates: number[]; overtime_tariffs: number[]; night_rate: number | null;
+  holiday_rate: number | null; minimum_contractual_pay: number | null; contingency: number | null; edr: number | null;
+  seniority_increments: number | null; allowances: Array<{ name: string; amount: number | null }>;
+  gross_pay: number | null; total_earnings: number | null; total_deductions: number | null; net_pay: number | null;
+  fields: Record<string, AIFieldEvidence>;
+}
+
+export interface PayslipMergeResult { analysis: PayslipAnalysis; conflicts: string[]; month: string | null; payType: "oraria" | "giornaliera" | "mensile" | "" }
+
+const confidenceMap: Record<AIFieldEvidence["confidence"], Confidence> = { high: "alta", medium: "media", low: "bassa" };
+const rank: Record<Confidence, number> = { alta: 3, media: 2, bassa: 1 };
+const same = (left: unknown, right: unknown) => typeof left === "number" && typeof right === "number"
+  ? Math.abs(left - right) <= Math.max(0.01, Math.abs(left) * .005)
+  : String(left).trim().toLocaleLowerCase("it-IT") === String(right).trim().toLocaleLowerCase("it-IT");
+
+function aiField<T>(value: T | null, key: string, ai: PayslipAIResult): DetectedValue<T> {
+  const meta = ai.fields[key];
+  return { value, confidence: meta ? confidenceMap[meta.confidence] : "bassa", source: value === null ? "Non rilevata" : `Analisi AI: ${meta?.evidence || "dato individuato nel documento"}`, method: "OpenAI multimodale" };
+}
+
+function mergeField<T>(label: string, local: DetectedValue<T>, remote: DetectedValue<T>, conflicts: string[]): DetectedValue<T> {
+  if (remote.value === null) return local;
+  if (local.value === null) return remote;
+  if (same(local.value, remote.value)) return { ...local, confidence: rank[local.confidence] >= 2 || rank[remote.confidence] >= 2 ? "alta" : "media", source: `Concordanza lettura locale + analisi AI · Locale: ${local.source} · AI: ${remote.source.replace(/^Analisi AI:\s*/, "")}`, method: "confronto locale/AI" };
+  if (remote.confidence === "bassa") return local;
+  if (local.confidence === "bassa") return remote;
+  conflicts.push(`${label}: locale “${local.value}”, AI “${remote.value}”`);
+  return { ...local, confidence: "bassa", source: `Conflitto da verificare · Lettura locale: ${local.value} (${local.source}) · Analisi AI: ${remote.value} (${remote.source.replace(/^Analisi AI:\s*/, "")})`, method: "confronto locale/AI" };
+}
+
+export function mergePayslipAnalyses(local: PayslipAnalysis, ai: PayslipAIResult): PayslipMergeResult {
+  const conflicts: string[] = [];
+  const merged = { ...emptyPayslipAnalysis(), ...local };
+  const field = <T,>(label: string, current: DetectedValue<T>, value: T | null, key: string) => mergeField(label, current, aiField(value, key, ai), conflicts);
+  merged.qualification = field("Qualifica", local.qualification, ai.qualification, "qualification");
+  merged.level = field("Livello", local.level, ai.level, "level");
+  merged.ccnl = field("CCNL", local.ccnl, ai.ccnl, "ccnl");
+  merged.contractCode = field("Contratto", local.contractCode, ai.contract_code, "contract_code");
+  merged.partTimePct = field("Part-time", local.partTimePct, ai.part_time_pct, "part_time_pct");
+  merged.basePay = field("Paga oraria", local.basePay, ai.hourly_pay, "hourly_pay");
+  merged.dailyPay = field("Paga giornaliera", local.dailyPay, ai.daily_pay, "daily_pay");
+  merged.monthlyPay = field("Retribuzione mensile", local.monthlyPay, ai.monthly_pay, "monthly_pay");
+  merged.ordinaryHours = field("Ore ordinarie", local.ordinaryHours, ai.ordinary_hours, "ordinary_hours");
+  merged.workedHours = field("Ore lavorate", local.workedHours, ai.worked_hours, "worked_hours");
+  merged.workedDays = field("Giorni lavorati", local.workedDays, ai.worked_days, "worked_days");
+  merged.overtimeHours = field("Ore straordinarie", local.overtimeHours, ai.overtime_hours, "overtime_hours");
+  merged.nightPct = field("Notturno", local.nightPct, ai.night_rate, "night_rate");
+  merged.holidayPct = field("Festivo", local.holidayPct, ai.holiday_rate, "holiday_rate");
+  merged.overtimeRates = ai.overtime_rates.length ? ai.overtime_rates.map((value) => ({ ...aiField(value, "overtime_rates", ai), derived: false })) : local.overtimeRates;
+  merged.overtimeTariffs = ai.overtime_tariffs.length ? ai.overtime_tariffs.map((value) => aiField(value, "overtime_tariffs", ai)) : local.overtimeTariffs;
+  merged.allowances = ai.allowances.length ? ai.allowances.map((item) => ({ ...item, source: `Analisi AI: ${ai.fields.allowances?.evidence || "voce nel documento"}`, confidence: confidenceMap[ai.fields.allowances?.confidence ?? "low"] })) : local.allowances;
+  const aiTotals = [
+    ["Lordo", ai.gross_pay, "gross_pay"], ["Totale competenze", ai.total_earnings, "total_earnings"],
+    ["Totale ritenute", ai.total_deductions, "total_deductions"], ["Netto a pagare", ai.net_pay, "net_pay"],
+  ] as const;
+  merged.totals = [...local.totals, ...aiTotals.filter(([, value]) => value !== null).map(([label, value, key]) => ({ label, value: value!, source: `Analisi AI: ${ai.fields[key]?.evidence || "totale nel documento"}` }))]
+    .filter((item, index, items) => items.findIndex((candidate) => candidate.label.toLowerCase() === item.label.toLowerCase() && same(candidate.value, item.value)) === index);
+  merged.extraFields = { ...(local.extraFields ?? {}), employmentType: aiField(ai.employment_type, "employment_type", ai), minimumContractualPay: aiField(ai.minimum_contractual_pay, "minimum_contractual_pay", ai), contingency: aiField(ai.contingency, "contingency", ai), edr: aiField(ai.edr, "edr", ai), seniorityIncrements: aiField(ai.seniority_increments, "seniority_increments", ai) };
+  const month = ai.month && ai.year ? `${ai.year}-${String(ai.month).padStart(2, "0")}` : null;
+  const payType = ai.pay_type === "hourly" ? "oraria" : ai.pay_type === "daily" ? "giornaliera" : ai.pay_type === "monthly" ? "mensile" : "";
+  return { analysis: merged, conflicts, month, payType };
+}
+
+export async function requestPayslipAI(file: File): Promise<PayslipAIResult> {
+  const body = new FormData(); body.append("file", file, file.name);
+  const response = await fetch("/api/analyze-payslip-ai", { method: "POST", body });
+  if (!response.ok) throw new Error(response.status === 503 ? "Analisi AI non configurata" : "Analisi AI temporaneamente non disponibile");
+  return response.json() as Promise<PayslipAIResult>;
+}

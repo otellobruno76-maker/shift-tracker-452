@@ -1,5 +1,5 @@
 import { useRef, useState } from "react";
-import { ChevronLeft, FileSearch, LockKeyhole, Upload } from "lucide-react";
+import { BrainCircuit, ChevronLeft, FileSearch, LockKeyhole, Upload } from "lucide-react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -17,6 +17,7 @@ import {
   type PayslipAnalysis,
 } from "@/lib/payslip";
 import { analyzeStructuredPayslip } from "@/lib/payslipStructured";
+import { mergePayslipAnalyses, requestPayslipAI } from "@/lib/payslipAi";
 import { initialReview, updateReviewValue, type ReviewState } from "@/lib/payslipReview";
 import { savePayslip, saveSettings, usePayslips, useSettings } from "@/lib/store";
 import { uid, type PayslipRecord } from "@/lib/types";
@@ -48,6 +49,10 @@ export default function ConfiguraCedolino() {
   const [error, setError] = useState("");
   const [filename, setFilename] = useState("");
   const [pendingSettings, setPendingSettings] = useState<Partial<typeof settings> | null>(null);
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [aiConsentOpen, setAiConsentOpen] = useState(false);
+  const [aiBusy, setAiBusy] = useState(false);
+  const [conflicts, setConflicts] = useState<string[]>([]);
 
   const analyze = async (file: File) => {
     setBusy(true);
@@ -55,6 +60,8 @@ export default function ConfiguraCedolino() {
     setAnalysis(null);
     setReview(null);
     setFilename(file.name);
+    setSelectedFile(file);
+    setConflicts([]);
     try {
       const document = await extractDocumentStructure(file, setProgress);
       const detected = analyzeStructuredPayslip(document);
@@ -67,6 +74,26 @@ export default function ConfiguraCedolino() {
       setError("Non siamo riusciti a leggere con sicurezza tutti i dati di questo cedolino. Completa i campi mancanti.");
     } finally {
       setBusy(false);
+    }
+  };
+
+  const analyzeWithAI = async () => {
+    if (!selectedFile || !analysis || !review) return;
+    setAiConsentOpen(false);
+    setAiBusy(true);
+    try {
+      const ai = await requestPayslipAI(selectedFile);
+      const merged = mergePayslipAnalyses(analysis, ai);
+      const nextReview = initialReview(merged.analysis, merged.month ?? review.month, settings.dailyOrdinaryHours);
+      if (merged.payType) nextReview.payType = merged.payType;
+      setAnalysis(merged.analysis);
+      setReview(nextReview);
+      setConflicts(merged.conflicts);
+      toast.success("Analisi AI completata. Controlla tutti i valori prima di salvare.");
+    } catch (cause) {
+      toast.error(cause instanceof Error ? cause.message : "Analisi AI temporaneamente non disponibile");
+    } finally {
+      setAiBusy(false);
     }
   };
 
@@ -170,9 +197,9 @@ export default function ConfiguraCedolino() {
         <div className="flex gap-3">
           <LockKeyhole className="mt-0.5 h-6 w-6 shrink-0 text-[#0369A1]" />
           <div>
-            <h2 className="font-bold text-[#0C4A6E]">Il documento resta sul dispositivo</h2>
+            <h2 className="font-bold text-[#0C4A6E]">Analisi locale sul dispositivo</h2>
             <p className="mt-1 text-sm leading-relaxed text-[#075985]">
-              L'analisi avviene in questa app. Il cedolino non viene caricato su server esterni. Salviamo solo i dati che confermi, non il PDF o la foto originale.
+              Per impostazione predefinita il cedolino resta sul dispositivo. Verrà inviato al servizio AI soltanto se scegli l’analisi avanzata e dai il consenso esplicito.
             </p>
           </div>
         </div>
@@ -223,6 +250,12 @@ export default function ConfiguraCedolino() {
       )}
 
       {analysis && review && (
+        <>
+        <section className="mt-4 rounded-2xl border border-[#C4B5FD] bg-[#F5F3FF] p-4">
+          <div className="flex gap-3"><BrainCircuit className="h-6 w-6 shrink-0 text-[#6D28D9]" /><div><h2 className="font-extrabold text-[#4C1D95]">Analisi avanzata con AI</h2><p className="mt-1 text-sm text-[#5B21B6]">Facoltativa. Confronta il documento con la lettura locale e segnala eventuali conflitti.</p></div></div>
+          <Button variant="outline" className="mt-3 h-12 w-full border-[#8B5CF6] text-[#5B21B6]" disabled={!selectedFile || aiBusy} onClick={() => setAiConsentOpen(true)}>{aiBusy ? "Analisi AI in corso…" : "Avvia analisi avanzata con AI"}</Button>
+        </section>
+        {conflicts.length > 0 && <section className="mt-4 rounded-2xl border border-[#F59E0B] bg-[#FFFBEB] p-4"><h2 className="font-extrabold text-[#92400E]">Valori da verificare</h2><p className="mt-1 text-sm text-[#92400E]">La lettura locale e l’AI non concordano. Non abbiamo scelto automaticamente.</p><ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-[#78350F]">{conflicts.map((item) => <li key={item}>{item}</li>)}</ul></section>}
         <Review
           analysis={analysis}
           review={review}
@@ -233,10 +266,21 @@ export default function ConfiguraCedolino() {
             setAnalysis(null);
             setReview(null);
             setError("");
+            setSelectedFile(null);
+            setConflicts([]);
           }}
           onConfirm={confirm}
         />
+        </>
       )}
+      <Dialog open={aiConsentOpen} onOpenChange={setAiConsentOpen}>
+        <DialogContent className="rounded-2xl" data-testid="ai-consent-dialog">
+          <DialogHeader><DialogTitle>Consenso per l’analisi AI</DialogTitle></DialogHeader>
+          <p className="text-sm leading-relaxed text-[#475569]">Per l’analisi avanzata questo documento verrà inviato temporaneamente al servizio AI. Continua solo se accetti.</p>
+          <p className="rounded-xl bg-[#F8FAFC] p-3 text-xs text-[#64748B]">Il documento non viene salvato in modo permanente dal backend. Riceverai soltanto dati strutturati da verificare.</p>
+          <DialogFooter className="gap-2"><Button variant="outline" onClick={() => setAiConsentOpen(false)}>No, continua in locale</Button><Button data-testid="btn-confirm-ai" onClick={() => void analyzeWithAI()}>Accetto e continua</Button></DialogFooter>
+        </DialogContent>
+      </Dialog>
       <Dialog open={pendingSettings !== null} onOpenChange={() => undefined}>
         <DialogContent className="rounded-2xl" data-testid="settings-comparison-dialog">
           <DialogHeader><DialogTitle>Vuoi aggiornare le impostazioni?</DialogTitle></DialogHeader>

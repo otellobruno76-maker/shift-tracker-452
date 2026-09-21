@@ -17,6 +17,7 @@ load_dotenv(ROOT_DIR / '.env')
 
 # MongoDB connection
 from lib.db import client, db, ensure_indexes
+from lib.payslip_ai import router as payslip_ai_router
 
 
 # Startup runs before the yield, shutdown after it. Add your own setup/teardown here.
@@ -62,6 +63,7 @@ async def get_status_checks():
 
 # Include the router in the main app
 app.include_router(api_router)
+app.include_router(payslip_ai_router, prefix="/api")
 
 app.add_middleware(
     CORSMiddleware,
