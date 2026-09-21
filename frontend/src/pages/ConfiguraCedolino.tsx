@@ -11,95 +11,22 @@ import { extractDocumentText } from "@/lib/documentText";
 import {
   analyzePayslipText,
   buildPayslipSettingsPatch,
+  emptyPayslipAnalysis,
+  estimatedDailyValue,
+  reliablePayslipFieldCount,
   type Confidence,
-  type DetectedAllowance,
   type PayslipAnalysis,
 } from "@/lib/payslip";
+import { initialReview, updateReviewValue, type ReviewState } from "@/lib/payslipReview";
 import { savePayslip, saveSettings, usePayslips, useSettings } from "@/lib/store";
 import { uid, type PayslipRecord } from "@/lib/types";
 
-interface ReviewState {
-  month: string;
-  qualification: string;
-  contractCode: string;
-  partTimePct: string;
-  basePay: string;
-  dailyPay: string;
-  monthlyPay: string;
-  ordinaryHours: string;
-  workedHours: string;
-  workedDays: string;
-  totalElementsPay: string;
-  overtimeHours: string;
-  overtimeTariffs: string;
-  overtimeRates: string;
-  nightPct: string;
-  holidayPct: string;
-  ccnl: string;
-  level: string;
-  selected: Record<string, boolean>;
-  allowances: Array<DetectedAllowance & { selected: boolean; amountText: string }>;
-  totals: Array<{ label: string; value: number }>;
-}
 
 const confidenceStyle: Record<Confidence, string> = {
   alta: "bg-[#DCFCE7] text-[#166534]",
   media: "bg-[#FEF3C7] text-[#92400E]",
   bassa: "bg-[#FEE2E2] text-[#991B1B]",
 };
-
-function displayNumber(value: number | null): string {
-  return value === null ? "" : String(value).replace(".", ",");
-}
-
-function initialReview(analysis: PayslipAnalysis, month: string): ReviewState {
-  const selected = (value: unknown, confidence: Confidence) => value !== null && confidence !== "bassa";
-  return {
-    month,
-    qualification: analysis.qualification.value ?? "",
-    contractCode: analysis.contractCode.value ?? "",
-    partTimePct: displayNumber(analysis.partTimePct.value),
-    basePay: displayNumber(analysis.basePay.value),
-    dailyPay: displayNumber(analysis.dailyPay.value),
-    monthlyPay: displayNumber(analysis.monthlyPay.value),
-    ordinaryHours: displayNumber(analysis.ordinaryHours.value),
-    workedHours: displayNumber(analysis.workedHours.value),
-    workedDays: displayNumber(analysis.workedDays.value),
-    totalElementsPay: displayNumber(analysis.totalElementsPay.value),
-    overtimeHours: displayNumber(analysis.overtimeHours.value),
-    overtimeTariffs: analysis.overtimeTariffs.map((item) => displayNumber(item.value)).join("; "),
-    overtimeRates: analysis.overtimeRates.map((rate) => displayNumber(rate.value)).join(", "),
-    nightPct: displayNumber(analysis.nightPct.value),
-    holidayPct: displayNumber(analysis.holidayPct.value),
-    ccnl: analysis.ccnl.value ?? "",
-    level: analysis.level.value ?? "",
-    selected: {
-      qualification: selected(analysis.qualification.value, analysis.qualification.confidence),
-      contractCode: selected(analysis.contractCode.value, analysis.contractCode.confidence),
-      partTimePct: selected(analysis.partTimePct.value, analysis.partTimePct.confidence),
-      basePay: selected(analysis.basePay.value, analysis.basePay.confidence),
-      dailyPay: selected(analysis.dailyPay.value, analysis.dailyPay.confidence),
-      monthlyPay: selected(analysis.monthlyPay.value, analysis.monthlyPay.confidence),
-      ordinaryHours: selected(analysis.ordinaryHours.value, analysis.ordinaryHours.confidence),
-      workedHours: selected(analysis.workedHours.value, analysis.workedHours.confidence),
-      workedDays: selected(analysis.workedDays.value, analysis.workedDays.confidence),
-      totalElementsPay: selected(analysis.totalElementsPay.value, analysis.totalElementsPay.confidence),
-      overtimeHours: selected(analysis.overtimeHours.value, analysis.overtimeHours.confidence),
-      overtimeTariffs: analysis.overtimeTariffs.length > 0 && analysis.overtimeTariffs.every((item) => item.confidence !== "bassa"),
-      overtimeRates: analysis.overtimeRates.length > 0 && analysis.overtimeRates.every((rate) => rate.confidence !== "bassa"),
-      nightPct: selected(analysis.nightPct.value, analysis.nightPct.confidence),
-      holidayPct: selected(analysis.holidayPct.value, analysis.holidayPct.confidence),
-      ccnl: selected(analysis.ccnl.value, analysis.ccnl.confidence),
-      level: selected(analysis.level.value, analysis.level.confidence),
-    },
-    allowances: analysis.allowances.map((allowance) => ({
-      ...allowance,
-      selected: allowance.confidence !== "bassa",
-      amountText: displayNumber(allowance.amount),
-    })),
-    totals: analysis.totals.map(({ label, value }) => ({ label, value })),
-  };
-}
 
 function parseNumber(value: string): number | null {
   const parsed = Number(value.trim().replace(/\./g, "").replace(",", "."));
@@ -132,9 +59,12 @@ export default function ConfiguraCedolino() {
       const text = await extractDocumentText(file, setProgress);
       const detected = analyzePayslipText(text);
       setAnalysis(detected);
-      setReview(initialReview(detected, replaced?.month ?? new Date().toISOString().slice(0, 7)));
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Non è stato possibile leggere il documento.");
+      setReview(initialReview(detected, replaced?.month ?? new Date().toISOString().slice(0, 7), settings.dailyOrdinaryHours));
+    } catch {
+      const detected = emptyPayslipAnalysis();
+      setAnalysis(detected);
+      setReview(initialReview(detected, replaced?.month ?? new Date().toISOString().slice(0, 7), settings.dailyOrdinaryHours));
+      setError("Non siamo riusciti a leggere con sicurezza tutti i dati di questo cedolino. Completa i campi mancanti.");
     } finally {
       setBusy(false);
     }
@@ -143,6 +73,7 @@ export default function ConfiguraCedolino() {
   const confirm = () => {
     if (!review) return;
     const chosen = review.selected;
+    const hasValue = (key: keyof ReviewState) => String(review[key] ?? "").trim() !== "";
     const values: Parameters<typeof buildPayslipSettingsPatch>[0] = {};
     const numericFields = [
       ["basePay", review.basePay],
@@ -189,7 +120,8 @@ export default function ConfiguraCedolino() {
     const record: PayslipRecord = {
       id: replaced?.id ?? uid(),
       month: review.month,
-      filename,
+      filename: filename || "Inserimento manuale",
+      payType: review.payType,
       qualification: chosen.qualification ? review.qualification.trim() : "",
       contractCode: chosen.contractCode ? review.contractCode.trim() : "",
       partTimePct: chosen.partTimePct ? parseNumber(review.partTimePct) : null,
@@ -197,9 +129,12 @@ export default function ConfiguraCedolino() {
       dailyPay: chosen.dailyPay ? parseNumber(review.dailyPay) : null,
       monthlyPay: chosen.monthlyPay ? parseNumber(review.monthlyPay) : null,
       ordinaryHours: chosen.ordinaryHours ? parseNumber(review.ordinaryHours) : null,
+      dailyOrdinaryHours: hasValue("dailyOrdinaryHours") ? parseNumber(review.dailyOrdinaryHours) : null,
       workedHours: chosen.workedHours ? parseNumber(review.workedHours) : null,
       workedDays: chosen.workedDays ? parseNumber(review.workedDays) : null,
       totalElementsPay: chosen.totalElementsPay ? parseNumber(review.totalElementsPay) : null,
+      grossTotal: hasValue("grossTotal") ? parseNumber(review.grossTotal) : null,
+      netTotal: hasValue("netTotal") ? parseNumber(review.netTotal) : null,
       overtimeHours: chosen.overtimeHours ? parseNumber(review.overtimeHours) : null,
       overtimeTariffs: chosen.overtimeTariffs ? review.overtimeTariffs.split(/[;,]/).map(parseNumber).filter((value): value is number => value !== null) : [],
       overtimeRates: values.overtimeRates ?? [],
@@ -278,11 +213,12 @@ export default function ConfiguraCedolino() {
             </div>
           )}
           {error && (
-            <div className="mt-4 rounded-xl bg-[#FEF2F2] p-3 text-sm text-[#991B1B]" data-testid="payslip-error">
-              <p className="font-bold">Documento non leggibile</p>
+            <div className="mt-4 rounded-xl bg-[#FFF7ED] p-3 text-sm text-[#9A3412]" data-testid="payslip-error">
+              <p className="font-bold">Puoi continuare manualmente</p>
               <p className="mt-1">{error}</p>
             </div>
           )}
+          {!busy && <Button variant="outline" className="mt-3 h-12 w-full" data-testid="btn-manual-payslip" onClick={() => { const detected = emptyPayslipAnalysis(); setFilename("Inserimento manuale"); setAnalysis(detected); setReview(initialReview(detected, replaced?.month ?? new Date().toISOString().slice(0, 7), settings.dailyOrdinaryHours)); }}>Compila senza caricare un documento</Button>}
         </section>
       )}
 
@@ -337,20 +273,28 @@ function Review({
   onReplace: () => void;
   onConfirm: () => void;
 }) {
-  const updateValue = (key: "qualification" | "contractCode" | "partTimePct" | "basePay" | "dailyPay" | "monthlyPay" | "ordinaryHours" | "workedHours" | "workedDays" | "totalElementsPay" | "overtimeHours" | "overtimeTariffs" | "overtimeRates" | "nightPct" | "holidayPct" | "ccnl" | "level", value: string) => onChange({ ...review, [key]: value });
+  const updateValue = (key: "qualification" | "contractCode" | "partTimePct" | "basePay" | "dailyPay" | "monthlyPay" | "ordinaryHours" | "dailyOrdinaryHours" | "workedHours" | "workedDays" | "totalElementsPay" | "grossTotal" | "netTotal" | "overtimeHours" | "overtimeTariffs" | "overtimeRates" | "nightPct" | "holidayPct" | "ccnl" | "level", value: string) => onChange(updateReviewValue(review, key, value));
   const updateSelected = (key: string, value: boolean) => onChange({ ...review, selected: { ...review.selected, [key]: value } });
   const sourceForRates = analysis.overtimeRates.length
     ? analysis.overtimeRates.map((rate) => rate.source).join(" · ")
     : "Non rilevata";
   const rateConfidence: Confidence = analysis.overtimeRates.some((rate) => rate.confidence === "media") ? "media" : analysis.overtimeRates[0]?.confidence ?? "bassa";
+  const incomplete = reliablePayslipFieldCount(analysis) < 4;
+  const estimatedDaily = estimatedDailyValue(parseNumber(review.basePay), parseNumber(review.dailyOrdinaryHours));
 
   return (
     <div className="mt-4 space-y-4" data-testid="payslip-review">
+      <section className="rounded-2xl border border-[#BAE6FD] bg-[#F0F9FF] p-4">
+        <h2 className="text-lg font-extrabold text-[#0C4A6E]">Completa i dati del cedolino</h2>
+        <p className="mt-1 text-sm text-[#075985]">Abbiamo precompilato quello che abbiamo riconosciuto. Correggi o completa soltanto ciò che ti serve.</p>
+        {incomplete && <p className="mt-3 rounded-xl bg-white/80 p-3 text-sm font-semibold text-[#9A3412]">Non siamo riusciti a leggere con sicurezza tutti i dati di questo cedolino. Abbiamo precompilato quello che abbiamo riconosciuto: completa i campi mancanti.</p>}
+      </section>
       <section className="rounded-2xl border border-[#E2E5EA] bg-white p-4 shadow-sm">
         <p className="text-xs font-bold uppercase tracking-wide text-[#64748B]">Documento analizzato</p>
         <p className="mt-1 truncate text-sm font-bold">{filename}</p>
         <p className="mt-2 text-xs text-[#64748B]">Controlla ogni valore. Il salvataggio nello storico non modifica automaticamente le impostazioni.</p>
         <div className="mt-3"><Label htmlFor="payslip-month" className="font-extrabold">Mese e anno</Label><Input id="payslip-month" type="month" className="mt-1 h-12" value={review.month} onChange={(event) => onChange({ ...review, month: event.target.value })} /></div>
+        <div className="mt-3"><Label htmlFor="pay-type" className="font-extrabold">Tipo di retribuzione</Label><select id="pay-type" className="mt-1 h-12 w-full rounded-md border border-input bg-white px-3 text-base" value={review.payType} onChange={(event) => onChange({ ...review, payType: event.target.value as ReviewState["payType"] })}><option value="">Non specificato</option><option value="oraria">Oraria</option><option value="giornaliera">Giornaliera</option><option value="mensile">Mensile</option></select></div>
       </section>
 
       <ReviewField label="Qualifica" value={review.qualification} checked={review.selected.qualification} source={analysis.qualification.source} confidence={analysis.qualification.confidence} onValue={(value) => updateValue("qualification", value)} onChecked={(value) => updateSelected("qualification", value)} />
@@ -360,9 +304,13 @@ function Review({
       <ReviewField label="Retribuzione giornaliera" suffix="€/giorno" value={review.dailyPay} checked={review.selected.dailyPay} source={analysis.dailyPay.source} confidence={analysis.dailyPay.confidence} onValue={(value) => updateValue("dailyPay", value)} onChecked={(value) => updateSelected("dailyPay", value)} />
       <ReviewField label="Retribuzione mensile" suffix="€/mese" value={review.monthlyPay} checked={review.selected.monthlyPay} source={analysis.monthlyPay.source} confidence={analysis.monthlyPay.confidence} onValue={(value) => updateValue("monthlyPay", value)} onChecked={(value) => updateSelected("monthlyPay", value)} />
       <ReviewField label="Ore ordinarie indicate" suffix="ore" value={review.ordinaryHours} checked={review.selected.ordinaryHours} source={analysis.ordinaryHours.source} confidence={analysis.ordinaryHours.confidence} onValue={(value) => updateValue("ordinaryHours", value)} onChecked={(value) => updateSelected("ordinaryHours", value)} />
+      <ReviewField label="Ore ordinarie giornaliere" suffix="ore/giorno" value={review.dailyOrdinaryHours} checked={review.dailyOrdinaryHours.trim() !== ""} source="Valore proposto dalle Impostazioni" confidence="media" onValue={(value) => updateValue("dailyOrdinaryHours", value)} onChecked={() => undefined} />
+      {estimatedDaily !== null && <section className="rounded-2xl border border-dashed border-[#93C5FD] bg-[#EFF6FF] p-4"><p className="text-sm font-bold text-[#1E40AF]">Valore giornaliero stimato</p><p className="mt-1 text-xl font-extrabold text-[#1E3A8A]">{estimatedDaily.toLocaleString("it-IT", { minimumFractionDigits: 2 })} €</p><p className="mt-1 text-xs text-[#1D4ED8]">Calcolato: paga oraria × ore ordinarie giornaliere. Non è un dato letto dal cedolino.</p></section>}
       <ReviewField label="Ore lavorate" suffix="ore" value={review.workedHours} checked={review.selected.workedHours} source={analysis.workedHours.source} confidence={analysis.workedHours.confidence} onValue={(value) => updateValue("workedHours", value)} onChecked={(value) => updateSelected("workedHours", value)} />
       <ReviewField label="Giorni lavorati" suffix="giorni" value={review.workedDays} checked={review.selected.workedDays} source={analysis.workedDays.source} confidence={analysis.workedDays.confidence} onValue={(value) => updateValue("workedDays", value)} onChecked={(value) => updateSelected("workedDays", value)} />
       <ReviewField label="Totale elementi retributivi" suffix="€" value={review.totalElementsPay} checked={review.selected.totalElementsPay} source={analysis.totalElementsPay.source} confidence={analysis.totalElementsPay.confidence} onValue={(value) => updateValue("totalElementsPay", value)} onChecked={(value) => updateSelected("totalElementsPay", value)} />
+      <ReviewField label="Lordo / totale competenze" suffix="€" value={review.grossTotal} checked={review.selected.grossTotal} source={analysis.totals.find((item) => /lordo|competenze/i.test(item.label))?.source ?? "Non rilevata"} confidence={analysis.totals.some((item) => /lordo|competenze/i.test(item.label)) ? "alta" : "bassa"} onValue={(value) => updateValue("grossTotal", value)} onChecked={(value) => updateSelected("grossTotal", value)} />
+      <ReviewField label="Netto a pagare" suffix="€" value={review.netTotal} checked={review.selected.netTotal} source={analysis.totals.find((item) => /netto/i.test(item.label))?.source ?? "Non rilevata"} confidence={analysis.totals.some((item) => /netto/i.test(item.label)) ? "alta" : "bassa"} onValue={(value) => updateValue("netTotal", value)} onChecked={(value) => updateSelected("netTotal", value)} />
       <ReviewField label="Ore straordinarie indicate" suffix="ore" value={review.overtimeHours} checked={review.selected.overtimeHours} source={analysis.overtimeHours.source} confidence={analysis.overtimeHours.confidence} onValue={(value) => updateValue("overtimeHours", value)} onChecked={(value) => updateSelected("overtimeHours", value)} />
       <ReviewField label="Tariffe straordinarie" suffix="€/h" value={review.overtimeTariffs} checked={review.selected.overtimeTariffs} source={analysis.overtimeTariffs.map((item) => item.source).join(" · ") || "Non rilevata"} confidence={analysis.overtimeTariffs[0]?.confidence ?? "bassa"} onValue={(value) => updateValue("overtimeTariffs", value)} onChecked={(value) => updateSelected("overtimeTariffs", value)} />
       <ReviewField label="Maggiorazioni straordinario" suffix="%" value={review.overtimeRates} checked={review.selected.overtimeRates} source={sourceForRates} confidence={rateConfidence} placeholder="Es. 15; 20; 25" onValue={(value) => updateValue("overtimeRates", value)} onChecked={(value) => updateSelected("overtimeRates", value)} />
@@ -374,7 +322,7 @@ function Review({
       <section className="rounded-2xl border border-[#E2E5EA] bg-white p-4 shadow-sm">
         <h2 className="font-extrabold">Indennità riconoscibili</h2>
         {review.allowances.length === 0 ? (
-          <p className="mt-2 text-sm text-[#64748B]">Non rilevata</p>
+          <p className="mt-2 text-sm text-[#64748B]">Nessuna indennità rilevata. Puoi aggiungerla manualmente se presente.</p>
         ) : (
           <div className="mt-3 space-y-3">
             {review.allowances.map((allowance, index) => (
@@ -385,7 +333,7 @@ function Review({
                     items[index] = { ...allowance, selected: checked === true };
                     onChange({ ...review, allowances: items });
                   }} />
-                  <span className="text-sm font-bold">{allowance.name}</span>
+                  <Input className="h-10" placeholder="Nome indennità" value={allowance.name} onChange={(event) => { const items = [...review.allowances]; items[index] = { ...allowance, name: event.target.value }; onChange({ ...review, allowances: items }); }} />
                 </span>
                 <Input
                   className="mt-2 h-11"
@@ -403,6 +351,7 @@ function Review({
             ))}
           </div>
         )}
+        <Button variant="outline" className="mt-3 h-11 w-full" onClick={() => onChange({ ...review, allowances: [...review.allowances, { name: "", amount: null, amountText: "", source: "Inserimento manuale", confidence: "bassa", selected: true }] })}>Aggiungi indennità</Button>
       </section>
 
       <section className="rounded-2xl border border-[#E2E5EA] bg-white p-4 shadow-sm"><h2 className="font-extrabold">Totali rilevabili</h2>{review.totals.length === 0 ? <p className="mt-2 text-sm text-[#64748B]">Non rilevati</p> : <div className="mt-2 space-y-1">{review.totals.map((total, index) => <p key={index} className="text-sm">{total.label}: <b>{total.value.toLocaleString("it-IT")}</b></p>)}</div>}</section>
@@ -436,13 +385,13 @@ function ReviewField({ label, suffix, value, checked, source, confidence, placeh
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <Label className="font-extrabold">{label}</Label>
-            <span className={`rounded-full px-2 py-0.5 text-[11px] font-bold ${confidenceStyle[confidence]}`}>Affidabilità {confidence}</span>
+            {detected && <span className={`rounded-full px-2 py-0.5 text-[11px] font-bold ${confidenceStyle[confidence]}`}>Affidabilità {confidence}</span>}
           </div>
           <div className="mt-2 flex items-center gap-2">
             <Input value={value} placeholder={placeholder ?? (detected ? "" : "Non rilevata")} className="h-11" onChange={(event) => onValue(event.target.value)} />
             {suffix && <span className="shrink-0 text-sm font-bold text-[#64748B]">{suffix}</span>}
           </div>
-          <p className="mt-2 break-words text-xs text-[#64748B]">Provenienza: {source}</p>
+          {detected && <p className="mt-2 break-words text-xs text-[#64748B]">Provenienza: {source}</p>}
         </div>
       </div>
     </section>

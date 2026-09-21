@@ -44,6 +44,14 @@ describe("backup integrato", () => {
     deletePayslip(payslip.id);
   });
 
+  it("salva manualmente un cedolino anche senza dati OCR", () => {
+    importBackup({ app: "registro-ore-lavoro", version: 1, settings: null, days: [] });
+    savePayslip({ ...payslip, id: "manuale", month: "2026-11", filename: "Inserimento manuale", basePay: null, ordinaryHours: null, overtimeRates: [], allowances: [], totals: [], ccnl: "", level: "" });
+    const backup = JSON.parse(exportBackupPayload());
+    expect(backup.payslips).toHaveLength(1);
+    expect(backup.payslips[0]).toMatchObject({ month: "2026-11", filename: "Inserimento manuale", basePay: null });
+  });
+
   it("azzera solo il registro preservando paga, CCNL, giornate tipo e cedolini", () => {
     importBackup({ app: "registro-ore-lavoro", version: 1, settings: null, days: [] });
     saveDayTemplate(template);

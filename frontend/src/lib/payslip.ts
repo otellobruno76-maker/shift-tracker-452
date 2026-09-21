@@ -55,6 +55,30 @@ export interface ConfirmedPayslipValues {
 const missingNumber = (): DetectedValue<number> => ({ value: null, source: "Non rilevata", confidence: "bassa" });
 const missingText = (): DetectedValue<string> => ({ value: null, source: "Non rilevata", confidence: "bassa" });
 
+export function emptyPayslipAnalysis(): PayslipAnalysis {
+  return {
+    qualification: missingText(), contractCode: missingText(), partTimePct: missingNumber(),
+    basePay: missingNumber(), dailyPay: missingNumber(), monthlyPay: missingNumber(),
+    ordinaryHours: missingNumber(), workedHours: missingNumber(), workedDays: missingNumber(),
+    overtimeHours: missingNumber(), overtimeTariffs: [], overtimeRates: [], nightPct: missingNumber(),
+    holidayPct: missingNumber(), allowances: [], ccnl: missingText(), level: missingText(),
+    totalElementsPay: missingNumber(), totals: [],
+  };
+}
+
+export function reliablePayslipFieldCount(analysis: PayslipAnalysis): number {
+  const fields = [analysis.basePay, analysis.dailyPay, analysis.monthlyPay, analysis.ordinaryHours,
+    analysis.workedHours, analysis.overtimeHours, analysis.nightPct, analysis.holidayPct,
+    analysis.ccnl, analysis.level, analysis.partTimePct];
+  return fields.filter((field) => field.value !== null && field.confidence !== "bassa").length
+    + analysis.overtimeRates.filter((field) => field.value !== null && field.confidence !== "bassa").length;
+}
+
+export function estimatedDailyValue(basePay: number | null, dailyHours: number | null): number | null {
+  if (basePay === null || dailyHours === null || basePay <= 0 || dailyHours <= 0) return null;
+  return Math.round(basePay * dailyHours * 100) / 100;
+}
+
 function numberIt(raw: string): number | null {
   const compacted = raw.replace(/\s/g, "");
   const cleaned = compacted.includes(",") && compacted.includes(".")

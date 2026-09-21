@@ -49,6 +49,7 @@ export interface PayslipRecord {
   /** Mese di competenza in formato YYYY-MM. */
   month: string;
   filename: string;
+  payType?: "oraria" | "giornaliera" | "mensile" | "";
   qualification?: string;
   contractCode?: string;
   partTimePct?: number | null;
@@ -56,9 +57,12 @@ export interface PayslipRecord {
   dailyPay?: number | null;
   monthlyPay?: number | null;
   ordinaryHours: number | null;
+  dailyOrdinaryHours?: number | null;
   workedHours?: number | null;
   workedDays?: number | null;
   totalElementsPay?: number | null;
+  grossTotal?: number | null;
+  netTotal?: number | null;
   overtimeHours?: number | null;
   overtimeTariffs?: number[];
   overtimeRates: number[];
