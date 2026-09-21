@@ -20,10 +20,15 @@ export interface DetectedAllowance {
 }
 
 export interface PayslipAnalysis {
+  qualification: DetectedValue<string>;
+  contractCode: DetectedValue<string>;
+  partTimePct: DetectedValue<number>;
   basePay: DetectedValue<number>;
   dailyPay: DetectedValue<number>;
   monthlyPay: DetectedValue<number>;
   ordinaryHours: DetectedValue<number>;
+  workedHours: DetectedValue<number>;
+  workedDays: DetectedValue<number>;
   overtimeHours: DetectedValue<number>;
   overtimeTariffs: DetectedValue<number>[];
   overtimeRates: DetectedRate[];
@@ -32,6 +37,7 @@ export interface PayslipAnalysis {
   allowances: DetectedAllowance[];
   ccnl: DetectedValue<string>;
   level: DetectedValue<string>;
+  totalElementsPay: DetectedValue<number>;
   totals: Array<{ label: string; value: number; source: string }>;
 }
 
@@ -60,6 +66,34 @@ function numberIt(raw: string): number | null {
 
 function compact(line: string): string {
   return line.replace(/\s+/g, " ").trim();
+}
+
+function cells(line: string): string[] {
+  return line.split(/\s*\|\s*/).map(compact).filter(Boolean);
+}
+
+function textBelowHeader(lines: string[], header: RegExp): Record<string, DetectedValue<string>> {
+  for (let index = 0; index < lines.length - 1; index++) {
+    const headers = cells(lines[index]);
+    if (headers.length < 2 || !headers.some((cell) => header.test(cell))) continue;
+    const values = cells(lines[index + 1]);
+    if (values.length < headers.length) continue;
+    const result: Record<string, DetectedValue<string>> = {};
+    headers.forEach((name, column) => {
+      result[compact(name).toLocaleLowerCase("it-IT")] = {
+        value: values[column] ?? null,
+        source: `${compact(name)} → ${values[column] ?? "Non rilevato"}`,
+        confidence: "alta",
+      };
+    });
+    return result;
+  }
+  return {};
+}
+
+function tableValue(table: Record<string, DetectedValue<string>>, pattern: RegExp): DetectedValue<string> {
+  const entry = Object.entries(table).find(([name]) => pattern.test(name))?.[1];
+  return entry ?? missingText();
 }
 
 function firstNumberAfter(lines: string[], label: RegExp, min: number, max: number): DetectedValue<number> {
@@ -97,15 +131,53 @@ function uniqueRates(rates: DetectedRate[]): DetectedRate[] {
 
 export function analyzePayslipText(rawText: string): PayslipAnalysis {
   const lines = rawText.split(/\r?\n/).map(compact).filter(Boolean);
-  const basePay = firstNumberAfter(
+  const employmentTable = textBelowHeader(lines, /qualifica|livello|contratto\s+di\s+lavoro|tipo\s+rapporto|part.?time/i);
+  const qualification = tableValue(employmentTable, /^qualifica$/i);
+  const contractCode = tableValue(employmentTable, /contratto\s+di\s+lavoro|^contratto$/i);
+  const partTimeText = tableValue(employmentTable, /part.?time/i);
+  const partTimeValue = partTimeText.value?.match(/\d+(?:[.,]\d+)?/)?.[0];
+  const partTimePct: DetectedValue<number> = partTimeValue
+    ? { value: numberIt(partTimeValue), source: partTimeText.source, confidence: partTimeText.confidence }
+    : firstNumberAfter(lines, /%\s*part.?time|part.?time\s*%?/i, 0, 100);
+
+  let basePay = firstNumberAfter(
     lines,
     /(?:paga|retribuzione|tariffa|valore)\s*(?:oraria|ora)|paga\s*base\s*oraria/i,
     1, 200,
   );
   const dailyPay = firstNumberAfter(lines, /(?:paga|retribuzione)\s*giornaliera/i, 1, 1000);
-  const monthlyPay = firstNumberAfter(lines, /(?:paga|retribuzione)\s*mensile/i, 100, 30000);
+  const monthlyPay = firstNumberAfter(lines, /(?:paga|retribuzione)\s*(?:mensile|mese)/i, 100, 30000);
   const ordinaryHours = firstNumberAfter(lines, /ore\s*(?:ordinarie|normali)|ordinario\s*ore/i, 0, 300);
+  const workedHours = firstNumberAfter(lines, /ore\s*lav(?:orate)?\.?/i, 0, 300);
+  const workedDays = firstNumberAfter(lines, /gg\s*lav(?:orati)?\.?|giorni\s*lavorati/i, 0, 31);
   const overtimeHours = firstNumberAfter(lines, /ore\s*straordinarie|straordinario\s*ore/i, 0, 250);
+
+  if (basePay.value === null) {
+    const candidates: Array<{ value: number; source: string }> = [];
+    for (let index = 0; index < lines.length; index++) {
+      const headers = cells(lines[index]);
+      const baseColumn = headers.findIndex((cell) => /dato\s*base/i.test(cell));
+      if (baseColumn < 0) continue;
+      for (let row = index + 1; row < Math.min(lines.length, index + 16); row++) {
+        const values = cells(lines[row]);
+        if (values.some((cell) => /dato\s*base/i.test(cell))) break;
+        if (!/(ferie|festivit[aà]|permess).*(ore)|ore.*(ferie|festivit[aà]|permess)/i.test(values.join(" "))) continue;
+        const value = numberIt(values[baseColumn] ?? "");
+        if (value !== null && value >= 1 && value <= 200) candidates.push({ value, source: compact(lines[row]) });
+      }
+    }
+    const groups = new Map<string, Array<{ value: number; source: string }>>();
+    for (const candidate of candidates) {
+      const key = candidate.value.toFixed(5);
+      groups.set(key, [...(groups.get(key) ?? []), candidate]);
+    }
+    const repeated = [...groups.values()].sort((a, b) => b.length - a.length)[0];
+    if (repeated?.length >= 2) basePay = {
+      value: repeated[0].value,
+      source: `Dato Base ripetuto in ${repeated.length} voci orarie: ${repeated.map((item) => item.source).join(" · ")}`,
+      confidence: "media",
+    };
+  }
 
   const overtimeRates: DetectedRate[] = [];
   const overtimeTariffs: DetectedValue<number>[] = [];
@@ -164,30 +236,35 @@ export function analyzePayslipText(rawText: string): PayslipAnalysis {
   }
 
   let ccnl = missingText();
-  let level = missingText();
+  let level = tableValue(employmentTable, /^livello$/i);
   for (const line of lines) {
     if (ccnl.value === null) {
       const match = line.match(/CCNL\s*[:-]?\s*(.{3,70})/i);
       if (match) ccnl = { value: compact(match[1]), source: compact(line), confidence: "alta" };
     }
     if (level.value === null) {
-      const match = line.match(/(?:livello|liv\.)\s*[:-]?\s*([A-Z0-9][A-Z0-9./-]{0,12})/i);
-      if (match) level = { value: match[1], source: compact(line), confidence: "alta" };
+      const match = line.match(/(?:livello|liv\.)\s*(?:[:=-]\s*|\s+)([0-9][A-Z0-9./-]{0,12})(?:\s|$)/i);
+      if (match && !/^(contratto|tipo|rapporto)$/i.test(match[1])) level = { value: match[1], source: compact(line), confidence: "alta" };
     }
   }
 
   const totals: Array<{ label: string; value: number; source: string }> = [];
   for (const line of lines) {
-    const match = line.match(/(totale\s+(?:competenze|lordo|netto|ore)|netto\s+(?:in\s+)?busta)[^\d]{0,20}(\d{1,3}(?:\.\d{3})*(?:,\d{1,2})?|\d+(?:[.,]\d{1,2})?)/i);
+    const match = line.match(/(totale\s+(?:competenze|ritenute|lordo|netto|ore)|netto\s+(?:(?:in\s+)?busta|a\s+pagare))[^\d]{0,20}(\d{1,3}(?:\.\d{3})*(?:,\d{1,2})?|\d+(?:[.,]\d{1,2})?)/i);
     const value = match ? numberIt(match[2]) : null;
     if (match && value !== null) totals.push({ label: compact(match[1]), value, source: compact(line) });
   }
 
   return {
+    qualification,
+    contractCode,
+    partTimePct,
     basePay,
     dailyPay,
     monthlyPay,
     ordinaryHours,
+    workedHours,
+    workedDays,
     overtimeHours,
     overtimeTariffs,
     overtimeRates: uniqueRates(overtimeRates),
@@ -196,6 +273,7 @@ export function analyzePayslipText(rawText: string): PayslipAnalysis {
     allowances: allowances.slice(0, 8),
     ccnl,
     level,
+    totalElementsPay: firstNumberAfter(lines, /totale\s+elementi\s+retributivi/i, 100, 30000),
     totals: totals.slice(0, 6),
   };
 }

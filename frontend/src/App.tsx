@@ -16,6 +16,11 @@ export default function App() {
     void hydrateAndSeed();
   }, []);
   const { pathname } = useLocation();
+  useEffect(() => {
+    window.scrollTo({ top: 0, left: 0, behavior: "auto" });
+    document.documentElement.scrollTop = 0;
+    document.body.scrollTop = 0;
+  }, [pathname]);
   const formMode = pathname.startsWith("/inserisci") || pathname.startsWith("/configura-cedolino") || pathname.startsWith("/cedolini");
 
   return (

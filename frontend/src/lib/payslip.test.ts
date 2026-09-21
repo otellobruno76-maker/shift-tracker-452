@@ -53,6 +53,44 @@ describe("calcolo maggiorazioni dal cedolino", () => {
     expect(result.ordinaryHours.value).toBe(264.55);
     expect(result.ordinaryHours.confidence).toBe("bassa");
   });
+
+  it("interpreta intestazioni e valori su righe successive senza confondere Livello e Contratto", () => {
+    const result = analyzePayslipText(`
+      Qualifica | Livello | Contratto di Lavoro | Tipo Rapporto | %Part-Time
+      Operaio a mese | 2 | 607 | Tempo indeterminato | 65%
+      Totale elementi retributivi | 1.432,89
+      Retribuzione mese | 931,38
+      Ore Lav. | 112,50
+      GG Lav. | 18
+      Voce | Quantità | Dato Base | Importo
+      Festività goduta ore fig | 8 | 8,28260 | 66,26
+      Ferie godute ore (fig.) | 8 | 8,28260 | 66,26
+      Totale Competenze | 1.150,00
+      Totale Ritenute | 250,00
+      NETTO A PAGARE | 900,00
+    `);
+
+    expect(result.qualification.value).toBe("Operaio a mese");
+    expect(result.level.value).toBe("2");
+    expect(result.level.value).not.toBe("Contratto");
+    expect(result.contractCode.value).toBe("607");
+    expect(result.partTimePct.value).toBe(65);
+    expect(result.totalElementsPay.value).toBe(1432.89);
+    expect(result.monthlyPay.value).toBe(931.38);
+    expect(result.workedHours.value).toBe(112.5);
+    expect(result.workedDays.value).toBe(18);
+    expect(result.basePay).toMatchObject({ value: 8.2826, confidence: "media" });
+    expect(result.basePay.source).toContain("Dato Base ripetuto");
+    expect(result.dailyPay.value).toBeNull();
+    expect(result.totals.map((item) => item.label.toLocaleLowerCase())).toEqual([
+      "totale competenze", "totale ritenute", "netto a pagare",
+    ]);
+  });
+
+  it("non accetta una semplice intestazione come valore del livello", () => {
+    const result = analyzePayslipText("Qualifica Livello Contratto di Lavoro Tipo Rapporto");
+    expect(result.level.value).toBeNull();
+  });
 });
 
 describe("applicazione dati confermati", () => {

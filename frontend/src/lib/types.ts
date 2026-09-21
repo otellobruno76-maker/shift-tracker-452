@@ -49,10 +49,16 @@ export interface PayslipRecord {
   /** Mese di competenza in formato YYYY-MM. */
   month: string;
   filename: string;
+  qualification?: string;
+  contractCode?: string;
+  partTimePct?: number | null;
   basePay: number | null;
   dailyPay?: number | null;
   monthlyPay?: number | null;
   ordinaryHours: number | null;
+  workedHours?: number | null;
+  workedDays?: number | null;
+  totalElementsPay?: number | null;
   overtimeHours?: number | null;
   overtimeTariffs?: number[];
   overtimeRates: number[];

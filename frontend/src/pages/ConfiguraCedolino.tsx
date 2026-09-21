@@ -20,10 +20,16 @@ import { uid, type PayslipRecord } from "@/lib/types";
 
 interface ReviewState {
   month: string;
+  qualification: string;
+  contractCode: string;
+  partTimePct: string;
   basePay: string;
   dailyPay: string;
   monthlyPay: string;
   ordinaryHours: string;
+  workedHours: string;
+  workedDays: string;
+  totalElementsPay: string;
   overtimeHours: string;
   overtimeTariffs: string;
   overtimeRates: string;
@@ -50,10 +56,16 @@ function initialReview(analysis: PayslipAnalysis, month: string): ReviewState {
   const selected = (value: unknown, confidence: Confidence) => value !== null && confidence !== "bassa";
   return {
     month,
+    qualification: analysis.qualification.value ?? "",
+    contractCode: analysis.contractCode.value ?? "",
+    partTimePct: displayNumber(analysis.partTimePct.value),
     basePay: displayNumber(analysis.basePay.value),
     dailyPay: displayNumber(analysis.dailyPay.value),
     monthlyPay: displayNumber(analysis.monthlyPay.value),
     ordinaryHours: displayNumber(analysis.ordinaryHours.value),
+    workedHours: displayNumber(analysis.workedHours.value),
+    workedDays: displayNumber(analysis.workedDays.value),
+    totalElementsPay: displayNumber(analysis.totalElementsPay.value),
     overtimeHours: displayNumber(analysis.overtimeHours.value),
     overtimeTariffs: analysis.overtimeTariffs.map((item) => displayNumber(item.value)).join("; "),
     overtimeRates: analysis.overtimeRates.map((rate) => displayNumber(rate.value)).join(", "),
@@ -62,10 +74,16 @@ function initialReview(analysis: PayslipAnalysis, month: string): ReviewState {
     ccnl: analysis.ccnl.value ?? "",
     level: analysis.level.value ?? "",
     selected: {
+      qualification: selected(analysis.qualification.value, analysis.qualification.confidence),
+      contractCode: selected(analysis.contractCode.value, analysis.contractCode.confidence),
+      partTimePct: selected(analysis.partTimePct.value, analysis.partTimePct.confidence),
       basePay: selected(analysis.basePay.value, analysis.basePay.confidence),
       dailyPay: selected(analysis.dailyPay.value, analysis.dailyPay.confidence),
       monthlyPay: selected(analysis.monthlyPay.value, analysis.monthlyPay.confidence),
       ordinaryHours: selected(analysis.ordinaryHours.value, analysis.ordinaryHours.confidence),
+      workedHours: selected(analysis.workedHours.value, analysis.workedHours.confidence),
+      workedDays: selected(analysis.workedDays.value, analysis.workedDays.confidence),
+      totalElementsPay: selected(analysis.totalElementsPay.value, analysis.totalElementsPay.confidence),
       overtimeHours: selected(analysis.overtimeHours.value, analysis.overtimeHours.confidence),
       overtimeTariffs: analysis.overtimeTariffs.length > 0 && analysis.overtimeTariffs.every((item) => item.confidence !== "bassa"),
       overtimeRates: analysis.overtimeRates.length > 0 && analysis.overtimeRates.every((rate) => rate.confidence !== "bassa"),
@@ -172,10 +190,16 @@ export default function ConfiguraCedolino() {
       id: replaced?.id ?? uid(),
       month: review.month,
       filename,
+      qualification: chosen.qualification ? review.qualification.trim() : "",
+      contractCode: chosen.contractCode ? review.contractCode.trim() : "",
+      partTimePct: chosen.partTimePct ? parseNumber(review.partTimePct) : null,
       basePay: chosen.basePay ? parseNumber(review.basePay) : null,
       dailyPay: chosen.dailyPay ? parseNumber(review.dailyPay) : null,
       monthlyPay: chosen.monthlyPay ? parseNumber(review.monthlyPay) : null,
       ordinaryHours: chosen.ordinaryHours ? parseNumber(review.ordinaryHours) : null,
+      workedHours: chosen.workedHours ? parseNumber(review.workedHours) : null,
+      workedDays: chosen.workedDays ? parseNumber(review.workedDays) : null,
+      totalElementsPay: chosen.totalElementsPay ? parseNumber(review.totalElementsPay) : null,
       overtimeHours: chosen.overtimeHours ? parseNumber(review.overtimeHours) : null,
       overtimeTariffs: chosen.overtimeTariffs ? review.overtimeTariffs.split(/[;,]/).map(parseNumber).filter((value): value is number => value !== null) : [],
       overtimeRates: values.overtimeRates ?? [],
@@ -313,7 +337,7 @@ function Review({
   onReplace: () => void;
   onConfirm: () => void;
 }) {
-  const updateValue = (key: "basePay" | "dailyPay" | "monthlyPay" | "ordinaryHours" | "overtimeHours" | "overtimeTariffs" | "overtimeRates" | "nightPct" | "holidayPct" | "ccnl" | "level", value: string) => onChange({ ...review, [key]: value });
+  const updateValue = (key: "qualification" | "contractCode" | "partTimePct" | "basePay" | "dailyPay" | "monthlyPay" | "ordinaryHours" | "workedHours" | "workedDays" | "totalElementsPay" | "overtimeHours" | "overtimeTariffs" | "overtimeRates" | "nightPct" | "holidayPct" | "ccnl" | "level", value: string) => onChange({ ...review, [key]: value });
   const updateSelected = (key: string, value: boolean) => onChange({ ...review, selected: { ...review.selected, [key]: value } });
   const sourceForRates = analysis.overtimeRates.length
     ? analysis.overtimeRates.map((rate) => rate.source).join(" · ")
@@ -329,10 +353,16 @@ function Review({
         <div className="mt-3"><Label htmlFor="payslip-month" className="font-extrabold">Mese e anno</Label><Input id="payslip-month" type="month" className="mt-1 h-12" value={review.month} onChange={(event) => onChange({ ...review, month: event.target.value })} /></div>
       </section>
 
+      <ReviewField label="Qualifica" value={review.qualification} checked={review.selected.qualification} source={analysis.qualification.source} confidence={analysis.qualification.confidence} onValue={(value) => updateValue("qualification", value)} onChecked={(value) => updateSelected("qualification", value)} />
+      <ReviewField label="Codice contratto" value={review.contractCode} checked={review.selected.contractCode} source={analysis.contractCode.source} confidence={analysis.contractCode.confidence} onValue={(value) => updateValue("contractCode", value)} onChecked={(value) => updateSelected("contractCode", value)} />
+      <ReviewField label="Part-time" suffix="%" value={review.partTimePct} checked={review.selected.partTimePct} source={analysis.partTimePct.source} confidence={analysis.partTimePct.confidence} onValue={(value) => updateValue("partTimePct", value)} onChecked={(value) => updateSelected("partTimePct", value)} />
       <ReviewField label="Paga oraria di riferimento" suffix="€/h" value={review.basePay} checked={review.selected.basePay} source={analysis.basePay.source} confidence={analysis.basePay.confidence} onValue={(value) => updateValue("basePay", value)} onChecked={(value) => updateSelected("basePay", value)} />
       <ReviewField label="Retribuzione giornaliera" suffix="€/giorno" value={review.dailyPay} checked={review.selected.dailyPay} source={analysis.dailyPay.source} confidence={analysis.dailyPay.confidence} onValue={(value) => updateValue("dailyPay", value)} onChecked={(value) => updateSelected("dailyPay", value)} />
       <ReviewField label="Retribuzione mensile" suffix="€/mese" value={review.monthlyPay} checked={review.selected.monthlyPay} source={analysis.monthlyPay.source} confidence={analysis.monthlyPay.confidence} onValue={(value) => updateValue("monthlyPay", value)} onChecked={(value) => updateSelected("monthlyPay", value)} />
       <ReviewField label="Ore ordinarie indicate" suffix="ore" value={review.ordinaryHours} checked={review.selected.ordinaryHours} source={analysis.ordinaryHours.source} confidence={analysis.ordinaryHours.confidence} onValue={(value) => updateValue("ordinaryHours", value)} onChecked={(value) => updateSelected("ordinaryHours", value)} />
+      <ReviewField label="Ore lavorate" suffix="ore" value={review.workedHours} checked={review.selected.workedHours} source={analysis.workedHours.source} confidence={analysis.workedHours.confidence} onValue={(value) => updateValue("workedHours", value)} onChecked={(value) => updateSelected("workedHours", value)} />
+      <ReviewField label="Giorni lavorati" suffix="giorni" value={review.workedDays} checked={review.selected.workedDays} source={analysis.workedDays.source} confidence={analysis.workedDays.confidence} onValue={(value) => updateValue("workedDays", value)} onChecked={(value) => updateSelected("workedDays", value)} />
+      <ReviewField label="Totale elementi retributivi" suffix="€" value={review.totalElementsPay} checked={review.selected.totalElementsPay} source={analysis.totalElementsPay.source} confidence={analysis.totalElementsPay.confidence} onValue={(value) => updateValue("totalElementsPay", value)} onChecked={(value) => updateSelected("totalElementsPay", value)} />
       <ReviewField label="Ore straordinarie indicate" suffix="ore" value={review.overtimeHours} checked={review.selected.overtimeHours} source={analysis.overtimeHours.source} confidence={analysis.overtimeHours.confidence} onValue={(value) => updateValue("overtimeHours", value)} onChecked={(value) => updateSelected("overtimeHours", value)} />
       <ReviewField label="Tariffe straordinarie" suffix="€/h" value={review.overtimeTariffs} checked={review.selected.overtimeTariffs} source={analysis.overtimeTariffs.map((item) => item.source).join(" · ") || "Non rilevata"} confidence={analysis.overtimeTariffs[0]?.confidence ?? "bassa"} onValue={(value) => updateValue("overtimeTariffs", value)} onChecked={(value) => updateSelected("overtimeTariffs", value)} />
       <ReviewField label="Maggiorazioni straordinario" suffix="%" value={review.overtimeRates} checked={review.selected.overtimeRates} source={sourceForRates} confidence={rateConfidence} placeholder="Es. 15; 20; 25" onValue={(value) => updateValue("overtimeRates", value)} onChecked={(value) => updateSelected("overtimeRates", value)} />
