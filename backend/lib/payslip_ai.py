@@ -133,7 +133,7 @@ async def analyze_document_with_ai(data: bytes, mime: str, filename: str) -> Pay
         raise PayslipAIError("AI_NOT_CONFIGURED")
     model = os.getenv("OPENAI_PAYSLIP_MODEL", "gpt-4.1-mini")
     encoded = base64.b64encode(data).decode("ascii")
-    document = ({"type": "input_file", "filename": filename, "file_data": f"data:{mime};base64,{encoded}", "detail": "high"}
+    document = ({"type": "input_file", "filename": filename, "file_data": f"data:{mime};base64,{encoded}"}
                 if mime == "application/pdf" else
                 {"type": "input_image", "image_url": f"data:{mime};base64,{encoded}", "detail": "high"})
     payload = {
