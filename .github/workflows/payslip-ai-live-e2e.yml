@@ -134,8 +134,19 @@ jobs:
             -D cors-headers.txt \
             -o /dev/null \
             "$API_BASE_URL/api/analyze-payslip-ai"
-          grep -Eiq "^access-control-allow-origin: ${PREVIEW_ORIGIN//./\\.}\r?$" cors-headers.txt
-          grep -Eiq "^access-control-allow-methods: .*POST" cors-headers.txt
+          cat cors-headers.txt
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+
+          headers = {}
+          for line in Path("cors-headers.txt").read_text().splitlines():
+              if ":" in line:
+                  name, value = line.split(":", 1)
+                  headers[name.lower()] = value.strip()
+          assert headers.get("access-control-allow-origin") == os.environ["PREVIEW_ORIGIN"], headers
+          assert "POST" in headers.get("access-control-allow-methods", ""), headers
+          PY
 
       - name: Analyze a real synthetic PDF through OpenAI
         shell: bash
