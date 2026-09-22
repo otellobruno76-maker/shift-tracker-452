@@ -23,6 +23,8 @@ jobs:
       PREVIEW_ORIGIN: https://cedolino-chiaro-1-0-integration.otellobruno76.chatgpt.site
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Create a valid synthetic payslip PDF
         shell: bash
@@ -94,6 +96,8 @@ jobs:
         shell: bash
         run: |
           ready=false
+          expected_revision=$(git log -1 --format=%H -- backend/lib/payslip_ai.py backend/payslip_server.py)
+          export EXPECTED_BACKEND_REVISION="$expected_revision"
           for attempt in {1..60}; do
             if curl --fail --silent --show-error --max-time 20 \
               "$API_BASE_URL/api/health" > health.json; then
@@ -103,7 +107,7 @@ jobs:
           from pathlib import Path
 
           health = json.loads(Path("health.json").read_text())
-          expected = os.environ["GITHUB_SHA"]
+          expected = os.environ["EXPECTED_BACKEND_REVISION"]
           assert health.get("status") == "ok", health
           assert health.get("ai") == "configured", health
           assert health.get("model") == "gpt-4.1-mini", health
