@@ -1,0 +1,172 @@
+name: Payslip AI live E2E
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - integration/cedolino-chiaro-1.0
+    paths:
+      - .github/workflows/payslip-ai-live-e2e.yml
+      - backend/lib/payslip_ai.py
+      - backend/payslip_server.py
+      - frontend/src/lib/payslipAi.ts
+
+permissions:
+  contents: read
+
+jobs:
+  live-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      API_BASE_URL: https://shift-tracker-452.onrender.com
+      PREVIEW_ORIGIN: https://cedolino-chiaro-1-0-integration.otellobruno76.chatgpt.site
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create a valid synthetic payslip PDF
+        shell: bash
+        run: |
+          python3 -m pip install --quiet reportlab==4.4.9
+          mkdir -p backend/tests/fixtures
+          python3 - <<'PY'
+          from reportlab.lib import colors
+          from reportlab.lib.pagesizes import A4
+          from reportlab.pdfgen import canvas
+
+          path = "backend/tests/fixtures/cedolino-ai-e2e.pdf"
+          pdf = canvas.Canvas(path, pagesize=A4)
+          width, height = A4
+          pdf.setTitle("Cedolino fittizio test AI")
+          pdf.setFont("Helvetica-Bold", 16)
+          pdf.drawString(42, height - 48, "CEDOLINO PAGA FITTIZIO - TEST TECNICO")
+          pdf.setFont("Helvetica", 9)
+          pdf.drawString(42, height - 65, "Dati sintetici: nessuna persona reale")
+          y = height - 100
+          labels = [
+              ("Mese competenza", "Settembre 2026"),
+              ("Qualifica", "Operaio a mese"),
+              ("Livello", "2"),
+              ("Contratto / CCNL", "Codice 607 - CCNL fittizio test"),
+              ("Tipo rapporto", "Part-time 65%"),
+              ("Retribuzione mese", "931,38 EUR"),
+              ("Ore lavorate", "104,00"),
+              ("Giorni lavorati", "20"),
+          ]
+          pdf.setFont("Helvetica", 10)
+          for index, (label, value) in enumerate(labels):
+              pdf.drawString(42, y - index * 20, label)
+              pdf.drawString(230, y - index * 20, value)
+          y -= len(labels) * 20 + 20
+          columns = [42, 250, 360, 455]
+          pdf.setFillColor(colors.HexColor("#E7EEF7"))
+          pdf.rect(38, y - 6, 515, 22, fill=1, stroke=0)
+          pdf.setFillColor(colors.black)
+          pdf.setFont("Helvetica-Bold", 9)
+          for x, heading in zip(columns, ["Voce", "Ore", "Dato Base", "Competenze"]):
+              pdf.drawString(x, y, heading)
+          rows = [
+              ("Festivita goduta ore fig", "2,0000", "8,28260", "16,57"),
+              ("Ferie godute ore (fig.)", "78,5000", "8,28260", "650,19"),
+              ("Straordinario +15%", "3,0000", "9,5250", "28,58"),
+          ]
+          pdf.setFont("Helvetica", 9)
+          y -= 24
+          for index, (label, hours, base, earnings) in enumerate(rows):
+              row_y = y - index * 20
+              pdf.drawString(columns[0], row_y, label)
+              pdf.drawRightString(columns[1] + 50, row_y, hours)
+              pdf.drawRightString(columns[2] + 60, row_y, base)
+              pdf.drawRightString(columns[3] + 75, row_y, earnings)
+          y -= len(rows) * 20 + 28
+          pdf.setFont("Helvetica-Bold", 10)
+          for index, (label, value) in enumerate([
+              ("Totale competenze", "1.120,00 EUR"),
+              ("Totale ritenute", "250,00 EUR"),
+              ("NETTO A PAGARE", "870,00 EUR"),
+          ]):
+              pdf.drawString(330, y - index * 22, label)
+              pdf.drawRightString(545, y - index * 22, value)
+          pdf.save()
+          PY
+
+      - name: Wait for this Render revision
+        shell: bash
+        run: |
+          ready=false
+          for attempt in {1..60}; do
+            if curl --fail --silent --show-error --max-time 20 \
+              "$API_BASE_URL/api/health" > health.json; then
+              if python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          health = json.loads(Path("health.json").read_text())
+          expected = os.environ["GITHUB_SHA"]
+          assert health.get("status") == "ok", health
+          assert health.get("ai") == "configured", health
+          assert health.get("model") == "gpt-4.1-mini", health
+          assert str(health.get("revision", "")).startswith(expected), health
+          PY
+              then
+                ready=true
+                break
+              fi
+            fi
+            sleep 10
+          done
+          test "$ready" = true
+          python3 -m json.tool health.json
+
+      - name: Verify preview CORS
+        shell: bash
+        run: |
+          curl --fail --silent --show-error --max-time 30 \
+            -X OPTIONS \
+            -H "Origin: $PREVIEW_ORIGIN" \
+            -H "Access-Control-Request-Method: POST" \
+            -H "Access-Control-Request-Headers: content-type" \
+            -D cors-headers.txt \
+            -o /dev/null \
+            "$API_BASE_URL/api/analyze-payslip-ai"
+          grep -Eiq "^access-control-allow-origin: ${PREVIEW_ORIGIN//./\\.}\r?$" cors-headers.txt
+          grep -Eiq "^access-control-allow-methods: .*POST" cors-headers.txt
+
+      - name: Analyze a real synthetic PDF through OpenAI
+        shell: bash
+        run: |
+          status=$(curl --silent --show-error --max-time 120 \
+            -o ai-result.json \
+            -w '%{http_code}' \
+            -F "file=@backend/tests/fixtures/cedolino-ai-e2e.pdf;type=application/pdf" \
+            "$API_BASE_URL/api/analyze-payslip-ai")
+          python3 -m json.tool ai-result.json
+          test "$status" = "200"
+
+      - name: Validate the structured AI response
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          data = json.loads(Path("ai-result.json").read_text())
+          assert data["month"] == 9, data
+          assert data["year"] == 2026, data
+          assert "operaio" in (data["qualification"] or "").lower(), data
+          assert data["level"] == "2", data
+          assert "607" in (data["contract_code"] or ""), data
+          assert abs(data["part_time_pct"] - 65) < 0.01, data
+          assert data["pay_type"] == "monthly", data
+          assert abs(data["monthly_pay"] - 931.38) < 0.01, data
+          assert abs(data["worked_hours"] - 104) < 0.01, data
+          assert abs(data["worked_days"] - 20) < 0.01, data
+          assert abs(data["overtime_hours"] - 3) < 0.01, data
+          assert any(abs(rate - 15) < 0.01 for rate in data["overtime_rates"]), data
+          assert abs(data["total_earnings"] - 1120) < 0.01, data
+          assert abs(data["total_deductions"] - 250) < 0.01, data
+          assert abs(data["net_pay"] - 870) < 0.01, data
+          assert abs(data["hourly_pay"] - 8.2826) < 0.00001, data
+          assert data["fields"]["hourly_pay"]["confidence"] in {"medium", "low"}, data
+          PY
