@@ -96,7 +96,7 @@ jobs:
         shell: bash
         run: |
           ready=false
-          expected_revision=$(git log -1 --format=%H -- backend/lib/payslip_ai.py backend/payslip_server.py)
+          expected_revision=$(git log -1 --format=%H -- backend)
           export EXPECTED_BACKEND_REVISION="$expected_revision"
           for attempt in {1..60}; do
             if curl --fail --silent --show-error --max-time 20 \
