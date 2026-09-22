@@ -15,7 +15,9 @@ export interface PayslipAIResult {
 
 export interface PayslipMergeResult { analysis: PayslipAnalysis; conflicts: string[]; month: string | null; payType: "oraria" | "giornaliera" | "mensile" | "" }
 
-const configuredApiBase = (import.meta.env.VITE_AI_API_BASE_URL ?? "").trim().replace(/\/$/, "");
+const configuredApiBase = (
+  import.meta.env.VITE_AI_API_BASE_URL?.trim() || "https://shift-tracker-452.onrender.com"
+).replace(/\/$/, "");
 export const payslipAIEndpoint = `${configuredApiBase}/api/analyze-payslip-ai`;
 
 const confidenceMap: Record<AIFieldEvidence["confidence"], Confidence> = { high: "alta", medium: "media", low: "bassa" };
