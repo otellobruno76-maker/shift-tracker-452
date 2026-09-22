@@ -16,7 +16,12 @@ def test_servizio_ai_health_senza_database(monkeypatch):
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     response = TestClient(payslip_app).get("/api/health")
     assert response.status_code == 200
-    assert response.json() == {"status": "ok", "ai": "not_configured", "model": "gpt-4.1-mini"}
+    assert response.json() == {
+        "status": "ok",
+        "ai": "not_configured",
+        "model": "gpt-4.1-mini",
+        "revision": "local",
+    }
 
 
 def result(**patch):
