@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 import os
 import tempfile
 from pathlib import Path
@@ -16,6 +17,22 @@ from pydantic import BaseModel, Field
 router = APIRouter()
 MAX_PAYSLIP_BYTES = 15 * 1024 * 1024
 ALLOWED_MIME = {"application/pdf", "image/jpeg", "image/png", "image/webp"}
+logger = logging.getLogger(__name__)
+
+
+class PayslipAIError(RuntimeError):
+    """Stable, non-sensitive diagnostic code for the API boundary."""
+
+
+ERROR_STATUS = {
+    "AI_NOT_CONFIGURED": (503, "Chiave API non configurata"),
+    "INVALID_API_KEY": (502, "Chiave API non valida"),
+    "NO_API_CREDIT": (402, "Credito API non disponibile"),
+    "MODEL_NOT_AVAILABLE": (502, "Modello AI non disponibile"),
+    "OPENAI_BAD_REQUEST": (502, "Richiesta al servizio AI non valida"),
+    "OPENAI_TIMEOUT": (504, "Il servizio AI non ha risposto in tempo"),
+    "INVALID_AI_RESPONSE": (502, "Risposta AI non valida"),
+}
 
 
 class FieldEvidence(BaseModel):
@@ -113,7 +130,7 @@ def _valid_signature(data: bytes, mime: str) -> bool:
 async def analyze_document_with_ai(data: bytes, mime: str, filename: str) -> PayslipAIResult:
     api_key = os.getenv("OPENAI_API_KEY")
     if not api_key:
-        raise RuntimeError("AI_NOT_CONFIGURED")
+        raise PayslipAIError("AI_NOT_CONFIGURED")
     model = os.getenv("OPENAI_PAYSLIP_MODEL", "gpt-4.1-mini")
     encoded = base64.b64encode(data).decode("ascii")
     document = ({"type": "input_file", "filename": filename, "file_data": f"data:{mime};base64,{encoded}", "detail": "high"}
@@ -124,14 +141,39 @@ async def analyze_document_with_ai(data: bytes, mime: str, filename: str) -> Pay
         "input": [{"role": "user", "content": [{"type": "input_text", "text": SYSTEM_PROMPT}, document]}],
         "text": {"format": {"type": "json_schema", "name": "italian_payslip", "strict": True, "schema": _schema()}},
     }
-    async with httpx.AsyncClient(timeout=90) as client:
-        response = await client.post("https://api.openai.com/v1/responses", headers={"Authorization": f"Bearer {api_key}"}, json=payload)
-        response.raise_for_status()
-    body = response.json()
-    output_text = next((content.get("text") for item in body.get("output", []) if item.get("type") == "message" for content in item.get("content", []) if content.get("type") == "output_text"), None)
-    if not output_text:
-        raise RuntimeError("EMPTY_AI_RESPONSE")
-    return PayslipAIResult.model_validate(json.loads(output_text))
+    try:
+        async with httpx.AsyncClient(timeout=90) as client:
+            response = await client.post("https://api.openai.com/v1/responses", headers={"Authorization": f"Bearer {api_key}"}, json=payload)
+    except httpx.TimeoutException as exc:
+        raise PayslipAIError("OPENAI_TIMEOUT") from exc
+    except httpx.RequestError as exc:
+        raise PayslipAIError("OPENAI_BAD_REQUEST") from exc
+
+    if response.is_error:
+        try:
+            error = response.json().get("error", {})
+        except (ValueError, AttributeError):
+            error = {}
+        error_code = str(error.get("code") or "").lower()
+        error_type = str(error.get("type") or "").lower()
+        if response.status_code == 401:
+            code = "INVALID_API_KEY"
+        elif response.status_code == 429 and ("quota" in error_code or "quota" in error_type):
+            code = "NO_API_CREDIT"
+        elif response.status_code == 404 or "model" in error_code:
+            code = "MODEL_NOT_AVAILABLE"
+        else:
+            code = "OPENAI_BAD_REQUEST"
+        raise PayslipAIError(code)
+
+    try:
+        body = response.json()
+        output_text = next((content.get("text") for item in body.get("output", []) if item.get("type") == "message" for content in item.get("content", []) if content.get("type") == "output_text"), None)
+        if not output_text:
+            raise ValueError("missing output_text")
+        return PayslipAIResult.model_validate(json.loads(output_text))
+    except (ValueError, TypeError, json.JSONDecodeError) as exc:
+        raise PayslipAIError("INVALID_AI_RESPONSE") from exc
 
 
 @router.post("/analyze-payslip-ai", response_model=PayslipAIResult)
@@ -153,12 +195,14 @@ async def analyze_payslip_ai(file: UploadFile = File(...)) -> PayslipAIResult:
             temporary.write(data)
             temporary_path = temporary.name
         return await analyze_document_with_ai(data, mime, Path(file.filename or "documento").name)
-    except RuntimeError as exc:
-        if str(exc) == "AI_NOT_CONFIGURED":
-            raise HTTPException(status_code=503, detail="Analisi AI non configurata") from exc
-        raise HTTPException(status_code=502, detail="Analisi AI temporaneamente non disponibile") from exc
+    except PayslipAIError as exc:
+        code = str(exc)
+        status, message = ERROR_STATUS.get(code, (502, "Analisi AI temporaneamente non disponibile"))
+        logger.warning("payslip_ai_failure code=%s mime=%s size=%d", code, mime, len(data))
+        raise HTTPException(status_code=status, detail={"code": code, "message": message}) from exc
     except Exception as exc:
-        raise HTTPException(status_code=502, detail="Analisi AI temporaneamente non disponibile") from exc
+        logger.exception("payslip_ai_failure code=INVALID_AI_RESPONSE mime=%s size=%d", mime, len(data))
+        raise HTTPException(status_code=502, detail={"code": "INVALID_AI_RESPONSE", "message": "Risposta AI non valida"}) from exc
     finally:
         if temporary_path:
             Path(temporary_path).unlink(missing_ok=True)

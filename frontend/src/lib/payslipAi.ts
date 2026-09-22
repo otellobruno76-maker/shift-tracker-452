@@ -15,6 +15,9 @@ export interface PayslipAIResult {
 
 export interface PayslipMergeResult { analysis: PayslipAnalysis; conflicts: string[]; month: string | null; payType: "oraria" | "giornaliera" | "mensile" | "" }
 
+const configuredApiBase = (import.meta.env.VITE_AI_API_BASE_URL ?? "").trim().replace(/\/$/, "");
+export const payslipAIEndpoint = `${configuredApiBase}/api/analyze-payslip-ai`;
+
 const confidenceMap: Record<AIFieldEvidence["confidence"], Confidence> = { high: "alta", medium: "media", low: "bassa" };
 const rank: Record<Confidence, number> = { alta: 3, media: 2, bassa: 1 };
 const same = (left: unknown, right: unknown) => typeof left === "number" && typeof right === "number"
@@ -71,7 +74,34 @@ export function mergePayslipAnalyses(local: PayslipAnalysis, ai: PayslipAIResult
 
 export async function requestPayslipAI(file: File): Promise<PayslipAIResult> {
   const body = new FormData(); body.append("file", file, file.name);
-  const response = await fetch("/api/analyze-payslip-ai", { method: "POST", body });
-  if (!response.ok) throw new Error(response.status === 503 ? "Analisi AI non configurata" : "Analisi AI temporaneamente non disponibile");
+  let response: Response;
+  try {
+    response = await fetch(payslipAIEndpoint, { method: "POST", body });
+  } catch {
+    console.warn("payslip_ai_failure code=BACKEND_NOT_REACHABLE");
+    throw new Error("Backend AI non raggiungibile");
+  }
+  if (!response.ok) {
+    let code = "";
+    try {
+      const payload = await response.json() as { detail?: string | { code?: string } };
+      code = typeof payload.detail === "object" ? payload.detail?.code ?? "" : "";
+    } catch { /* risposta non JSON: tipica di proxy/static hosting */ }
+    const messages: Record<string, string> = {
+      AI_NOT_CONFIGURED: "Chiave API non configurata",
+      INVALID_API_KEY: "Chiave API non valida",
+      NO_API_CREDIT: "Credito API non disponibile",
+      MODEL_NOT_AVAILABLE: "Modello AI non disponibile",
+      OPENAI_BAD_REQUEST: "Richiesta AI non valida",
+      OPENAI_TIMEOUT: "Il servizio AI non ha risposto in tempo",
+      INVALID_AI_RESPONSE: "Risposta AI non valida",
+    };
+    if (messages[code]) throw new Error(messages[code]);
+    if ([404, 405].includes(response.status)) {
+      console.warn(`payslip_ai_failure code=BACKEND_NOT_REACHABLE status=${response.status}`);
+      throw new Error("Backend AI non raggiungibile");
+    }
+    throw new Error(`Servizio AI non disponibile (HTTP ${response.status})`);
+  }
   return response.json() as Promise<PayslipAIResult>;
 }

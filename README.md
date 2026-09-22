@@ -24,6 +24,16 @@ cd backend && uvicorn server:app --host 0.0.0.0 --port 8001 --reload   # http://
 cd frontend && yarn dev                                                # http://localhost:3000
 ```
 
+Per pubblicare soltanto il servizio opzionale di analisi AI, senza database:
+
+```bash
+cd backend && uvicorn payslip_server:app --host 0.0.0.0 --port "$PORT"
+```
+
+Configurare nel backend `OPENAI_API_KEY` come secret, `OPENAI_PAYSLIP_MODEL`
+e `CORS_ORIGINS`. Nel build del frontend impostare soltanto l'URL pubblico non
+segreto `VITE_AI_API_BASE_URL`; la chiave OpenAI non deve mai essere esposta al browser.
+
 ## The `/api` proxy convention
 
 Every backend route lives under `/api` (the backend mounts one

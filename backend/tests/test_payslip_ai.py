@@ -3,12 +3,20 @@ from fastapi.testclient import TestClient
 import pytest
 
 from lib import payslip_ai
+from payslip_server import app as payslip_app
 
 
 def app_client() -> TestClient:
     app = FastAPI()
     app.include_router(payslip_ai.router, prefix="/api")
     return TestClient(app)
+
+
+def test_servizio_ai_health_senza_database(monkeypatch):
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    response = TestClient(payslip_app).get("/api/health")
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok", "ai": "not_configured", "model": "gpt-4.1-mini"}
 
 
 def result(**patch):
@@ -71,15 +79,28 @@ def test_risposta_ai_incompleta_resta_null(monkeypatch):
 
 def test_errore_api_sicuro(monkeypatch):
     async def broken(*_args, **_kwargs):
-        raise RuntimeError("provider detail that must not leak")
+        raise payslip_ai.PayslipAIError("OPENAI_BAD_REQUEST")
     monkeypatch.setattr(payslip_ai, "analyze_document_with_ai", broken)
     response = app_client().post("/api/analyze-payslip-ai", files={"file": ("x.pdf", b"%PDF-ok", "application/pdf")})
     assert response.status_code == 502
-    assert "provider detail" not in response.text
+    assert response.json()["detail"]["code"] == "OPENAI_BAD_REQUEST"
 
 
 def test_assenza_chiave_api(monkeypatch):
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     response = app_client().post("/api/analyze-payslip-ai", files={"file": ("x.pdf", b"%PDF-ok", "application/pdf")})
     assert response.status_code == 503
-    assert response.json()["detail"] == "Analisi AI non configurata"
+    assert response.json()["detail"]["code"] == "AI_NOT_CONFIGURED"
+
+
+@pytest.mark.parametrize("code,status", [
+    ("INVALID_API_KEY", 502), ("NO_API_CREDIT", 402), ("MODEL_NOT_AVAILABLE", 502),
+    ("OPENAI_BAD_REQUEST", 502), ("OPENAI_TIMEOUT", 504), ("INVALID_AI_RESPONSE", 502),
+])
+def test_codici_diagnostici_sicuri(monkeypatch, code, status):
+    async def broken(*_args, **_kwargs):
+        raise payslip_ai.PayslipAIError(code)
+    monkeypatch.setattr(payslip_ai, "analyze_document_with_ai", broken)
+    response = app_client().post("/api/analyze-payslip-ai", files={"file": ("x.pdf", b"%PDF-ok", "application/pdf")})
+    assert response.status_code == status
+    assert response.json()["detail"] == {"code": code, "message": payslip_ai.ERROR_STATUS[code][1]}

@@ -1,6 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { emptyPayslipAnalysis } from "./payslip";
-import { mergePayslipAnalyses, type PayslipAIResult } from "./payslipAi";
+import { mergePayslipAnalyses, payslipAIEndpoint, requestPayslipAI, type PayslipAIResult } from "./payslipAi";
+
+afterEach(() => vi.restoreAllMocks());
 
 const ai = (patch: Partial<PayslipAIResult> = {}): PayslipAIResult => ({
   month: 8, year: 2026, qualification: "Operaio a mese", level: "2", ccnl: null, contract_code: "607",
@@ -14,6 +16,25 @@ const ai = (patch: Partial<PayslipAIResult> = {}): PayslipAIResult => ({
     contract_code: { confidence: "high", evidence: "colonna Contratto" }, part_time_pct: { confidence: "high", evidence: "colonna %Part-Time" },
     monthly_pay: { confidence: "high", evidence: "Retribuzione mese" }, hourly_pay: { confidence: "medium", evidence: "Dato Base ripetuto in due voci orarie" },
   }, ...patch,
+});
+
+describe("diagnostica endpoint AI", () => {
+  const file = new File(["%PDF-test"], "test.pdf", { type: "application/pdf" });
+
+  it("riconosce una route backend assente", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(null, { status: 405 })));
+    await expect(requestPayslipAI(file)).rejects.toThrow("Backend AI non raggiungibile");
+    expect(fetch).toHaveBeenCalledWith(payslipAIEndpoint, expect.objectContaining({ method: "POST" }));
+  });
+
+  it("mostra il codice diagnostico sicuro restituito dal backend", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(
+      JSON.stringify({ detail: { code: "NO_API_CREDIT", message: "Credito API non disponibile" } }),
+      { status: 402, headers: { "Content-Type": "application/json" } },
+    )));
+    await expect(requestPayslipAI(file)).rejects.toThrow("Credito API non disponibile");
+  });
 });
 
 describe("merge lettura locale e analisi AI", () => {
