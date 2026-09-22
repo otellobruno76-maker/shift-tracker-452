@@ -29,6 +29,7 @@ async def health() -> dict[str, str]:
         "status": "ok",
         "ai": "configured" if os.getenv("OPENAI_API_KEY") else "not_configured",
         "model": os.getenv("OPENAI_PAYSLIP_MODEL", "gpt-4.1-mini"),
+        "revision": os.getenv("RENDER_GIT_COMMIT", "local"),
     }
 
 
