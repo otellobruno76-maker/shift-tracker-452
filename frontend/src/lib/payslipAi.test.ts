@@ -21,6 +21,10 @@ const ai = (patch: Partial<PayslipAIResult> = {}): PayslipAIResult => ({
 describe("diagnostica endpoint AI", () => {
   const file = new File(["%PDF-test"], "test.pdf", { type: "application/pdf" });
 
+  it("usa il backend Render della preview", () => {
+    expect(payslipAIEndpoint).toBe("https://shift-tracker-452.onrender.com/api/analyze-payslip-ai");
+  });
+
   it("riconosce una route backend assente", async () => {
     vi.spyOn(console, "warn").mockImplementation(() => undefined);
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(null, { status: 405 })));
