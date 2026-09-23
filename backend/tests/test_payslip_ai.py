@@ -125,6 +125,27 @@ def test_normalizzazione_riusa_percentuale_e_ore_della_voce_strutturata():
     assert normalized.overtime_tariffs == []
 
 
+def test_normalizzazione_scartata_tariffa_inferita_e_recupera_totali_espliciti():
+    value = payslip_ai.PayslipAIResult(
+        pay_type="unknown", overtime_tariffs=[9.375],
+        fields={"overtime_tariffs": {"confidence": "medium", "evidence": "calcolata da 75 euro / 8 ore"}},
+        line_items=[
+            {"original_description": "Straord. 15%", "category": "overtime", "quantity": 8, "unit": "hours", "rate_pct": 15, "amount": 75, "confidence": "high", "evidence": "riga"},
+            {"original_description": "Totale competenze", "category": "earnings", "quantity": None, "unit": "euro", "rate_pct": None, "amount": 1100, "confidence": "high", "evidence": "riga"},
+        ],
+    )
+    normalized = payslip_ai.normalize_result(value)
+    assert normalized.overtime_tariffs == []
+    assert normalized.total_earnings == 1100
+
+
+def test_normalizzazione_mantiene_tariffa_oraria_esplicita():
+    value = payslip_ai.PayslipAIResult(pay_type="unknown", overtime_tariffs=[12.5], fields={
+        "overtime_tariffs": {"confidence": "high", "evidence": "Tariffa straordinario EUR/h 12,50"},
+    })
+    assert payslip_ai.normalize_result(value).overtime_tariffs == [12.5]
+
+
 def test_errore_api_sicuro(monkeypatch):
     async def broken(*_args, **_kwargs):
         raise payslip_ai.PayslipAIError("OPENAI_BAD_REQUEST")

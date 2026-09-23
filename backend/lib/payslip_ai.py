@@ -6,6 +6,7 @@ import base64
 import json
 import logging
 import os
+import re
 import tempfile
 import time
 from collections import Counter
@@ -125,6 +126,19 @@ def normalize_result(result: PayslipAIResult) -> PayslipAIResult:
         hours = [item.quantity for item in overtime_items if item.unit == "hours" and item.quantity is not None]
         if hours:
             updates["overtime_hours"] = round(sum(hours), 4)
+    tariff_evidence = result.fields.get("overtime_tariffs")
+    explicit_tariff = bool(tariff_evidence and re.search(r"(?:€|eur)\s*/\s*h|euro\s*(?:all.?ora|ora)|tariffa\s+oraria", tariff_evidence.evidence, re.I))
+    if result.overtime_tariffs and not explicit_tariff:
+        updates["overtime_tariffs"] = []
+    aggregate_items = {
+        "total_earnings": "earnings", "total_deductions": "deductions", "net_pay": "net",
+    }
+    for field, category in aggregate_items.items():
+        if getattr(result, field) is not None:
+            continue
+        values = [item.amount for item in result.line_items if item.category == category and item.amount is not None and item.confidence != "low"]
+        if len(values) == 1:
+            updates[field] = values[0]
     return result.model_copy(update=updates) if updates else result
 
 
