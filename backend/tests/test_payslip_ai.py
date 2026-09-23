@@ -114,6 +114,17 @@ def test_prompt_distingue_tariffa_oraria_da_importo_totale():
     assert "line_items.amount" in payslip_ai.SYSTEM_PROMPT
 
 
+def test_normalizzazione_riusa_percentuale_e_ore_della_voce_strutturata():
+    value = payslip_ai.PayslipAIResult(pay_type="unknown", line_items=[{
+        "original_description": "Straord. 15%", "category": "overtime", "quantity": 8,
+        "unit": "hours", "rate_pct": 15, "amount": 75, "confidence": "high", "evidence": "riga",
+    }])
+    normalized = payslip_ai.normalize_result(value)
+    assert normalized.overtime_rates == [15]
+    assert normalized.overtime_hours == 8
+    assert normalized.overtime_tariffs == []
+
+
 def test_errore_api_sicuro(monkeypatch):
     async def broken(*_args, **_kwargs):
         raise payslip_ai.PayslipAIError("OPENAI_BAD_REQUEST")

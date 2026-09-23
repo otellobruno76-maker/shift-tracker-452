@@ -113,6 +113,21 @@ class PayslipAIResult(BaseModel):
     line_items: list[PayslipLineItem] = Field(default_factory=list)
 
 
+def normalize_result(result: PayslipAIResult) -> PayslipAIResult:
+    """Completa solo aggregati matematici già espliciti nelle voci strutturate."""
+    updates: dict = {}
+    overtime_items = [item for item in result.line_items if item.category == "overtime" and item.confidence != "low"]
+    if not result.overtime_rates:
+        rates = sorted({item.rate_pct for item in overtime_items if item.rate_pct is not None})
+        if rates:
+            updates["overtime_rates"] = rates
+    if result.overtime_hours is None:
+        hours = [item.quantity for item in overtime_items if item.unit == "hours" and item.quantity is not None]
+        if hours:
+            updates["overtime_hours"] = round(sum(hours), 4)
+    return result.model_copy(update=updates) if updates else result
+
+
 SYSTEM_PROMPT = """Sei un analizzatore prudente di cedolini paga italiani.
 Leggi l'intero documento, comprese tabelle, colonne, intestazioni spezzate e note.
 Non presumere un layout specifico e non confondere mai un'intestazione con il suo valore.
@@ -236,7 +251,7 @@ async def analyze_document_with_ai(data: bytes, mime: str, filename: str) -> Pay
                 item["field"]: {"confidence": item["confidence"], "evidence": item["evidence"]}
                 for item in evidence if isinstance(item, dict) and item.get("field")
             }
-        return PayslipAIResult.model_validate(parsed)
+        return normalize_result(PayslipAIResult.model_validate(parsed))
     except (ValueError, TypeError, json.JSONDecodeError) as exc:
         raise PayslipAIError("INVALID_AI_RESPONSE") from exc
 
