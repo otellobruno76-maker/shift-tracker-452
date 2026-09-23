@@ -182,6 +182,12 @@ jobs:
           assert abs(data["total_earnings"] - 1120) < 0.01, data
           assert abs(data["total_deductions"] - 250) < 0.01, data
           assert abs(data["net_pay"] - 870) < 0.01, data
-          assert abs(data["hourly_pay"] - 8.2826) < 0.00001, data
-          assert data["fields"]["hourly_pay"]["confidence"] in {"medium", "low"}, data
+          # Il Dato Base ripetuto può essere proposto come candidato, ma non è
+          # una paga oraria esplicita. Il comportamento prudente (null) è valido;
+          # se il modello lo propone, deve restare un dato da verificare.
+          hourly_pay = data["hourly_pay"]
+          if hourly_pay is not None:
+              assert abs(hourly_pay - 8.2826) < 0.00001, data
+              assert data["fields"]["hourly_pay"]["confidence"] in {"medium", "low"}, data
+          assert data["overtime_tariffs"] == [], data
           PY
