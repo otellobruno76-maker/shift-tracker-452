@@ -125,6 +125,18 @@ def test_normalizzazione_riusa_percentuale_e_ore_della_voce_strutturata():
     assert normalized.overtime_tariffs == []
 
 
+def test_normalizzazione_corregge_dato_base_scambiato_per_percentuale():
+    value = payslip_ai.PayslipAIResult(
+        pay_type="unknown",
+        overtime_rates=[9.525],
+        line_items=[{
+            "original_description": "Straordinario +15%", "category": "overtime", "quantity": 3,
+            "unit": "hours", "rate_pct": 15, "amount": 28.58, "confidence": "high", "evidence": "riga",
+        }],
+    )
+    assert payslip_ai.normalize_result(value).overtime_rates == [15]
+
+
 def test_normalizzazione_scartata_tariffa_inferita_e_recupera_totali_espliciti():
     value = payslip_ai.PayslipAIResult(
         pay_type="unknown", overtime_tariffs=[9.375],

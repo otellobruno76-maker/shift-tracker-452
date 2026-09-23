@@ -136,10 +136,11 @@ def normalize_result(result: PayslipAIResult) -> PayslipAIResult:
         fields["hourly_pay"] = hourly_evidence.model_copy(update={"confidence": "medium"})
         updates["fields"] = fields
     overtime_items = [item for item in result.line_items if item.category == "overtime" and item.confidence != "low"]
-    if not result.overtime_rates:
-        rates = sorted({item.rate_pct for item in overtime_items if item.rate_pct is not None})
-        if rates:
-            updates["overtime_rates"] = rates
+    rates = sorted({item.rate_pct for item in overtime_items if item.rate_pct is not None})
+    # Le percentuali esplicite delle righe strutturate prevalgono sul campo
+    # aggregato del modello, che può confondere il Dato Base con una %.
+    if rates and rates != result.overtime_rates:
+        updates["overtime_rates"] = rates
     if result.overtime_hours is None:
         hours = [item.quantity for item in overtime_items if item.unit == "hours" and item.quantity is not None]
         if hours:
