@@ -109,6 +109,11 @@ def test_classificazione_errore_400_non_espone_il_messaggio(message, expected):
     assert payslip_ai._safe_bad_request_code({"message": message}) == expected
 
 
+def test_prompt_distingue_tariffa_oraria_da_importo_totale():
+    assert "soltanto tariffe unitarie espresse in €/h" in payslip_ai.SYSTEM_PROMPT
+    assert "line_items.amount" in payslip_ai.SYSTEM_PROMPT
+
+
 def test_errore_api_sicuro(monkeypatch):
     async def broken(*_args, **_kwargs):
         raise payslip_ai.PayslipAIError("OPENAI_BAD_REQUEST")

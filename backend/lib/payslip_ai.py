@@ -124,6 +124,8 @@ Riconosci sinonimi e abbreviazioni italiane e controlla la coerenza matematica q
 Non estrarre né restituire codice fiscale, IBAN, indirizzo, conto corrente o dati personali non richiesti.
 Per ogni voce utile conserva la descrizione originale in line_items e normalizzala nella categoria prevista.
 Non sommare concetti semanticamente diversi e indica sempre unità, confidence ed evidence.
+Inserisci in overtime_tariffs soltanto tariffe unitarie espresse in €/h: l'importo totale
+della voce straordinario appartiene a line_items.amount e non è una tariffa oraria.
 Restituisci esclusivamente lo schema JSON richiesto."""
 
 
