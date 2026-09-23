@@ -120,7 +120,11 @@ def _schema() -> dict:
         "overtime_hours", "overtime_rates", "overtime_tariffs", "night_rate", "holiday_rate", "minimum_contractual_pay",
         "contingency", "edr", "seniority_increments", "allowances", "gross_pay", "total_earnings", "total_deductions", "net_pay",
     )
-    evidence_schema = {"type": "object", "additionalProperties": False, "properties": {"confidence": {"type": "string", "enum": ["high", "medium", "low"]}, "evidence": {"type": "string"}}, "required": ["confidence", "evidence"]}
+    evidence_schema = {"type": "object", "additionalProperties": False, "properties": {
+        "field": {"type": "string", "enum": list(field_names)},
+        "confidence": {"type": "string", "enum": ["high", "medium", "low"]},
+        "evidence": {"type": "string"},
+    }, "required": ["field", "confidence", "evidence"]}
     properties: dict[str, dict] = {
         "month": {"type": ["integer", "null"], "minimum": 1, "maximum": 12},
         "year": {"type": ["integer", "null"], "minimum": 2000, "maximum": 2100},
@@ -145,7 +149,9 @@ def _schema() -> dict:
             "confidence": {"type": "string", "enum": ["high", "medium", "low"]},
             "evidence": {"type": "string"},
         }, "required": ["original_description", "category", "quantity", "unit", "rate_pct", "amount", "confidence", "evidence"]}},
-        "fields": {"type": "object", "additionalProperties": False, "properties": {key: evidence_schema for key in field_names}, "required": list(field_names)},
+        # Un array evita di duplicare decine di sotto-schemi identici e resta
+        # entro i limiti di complessità degli Structured Outputs.
+        "fields": {"type": "array", "items": evidence_schema},
     }
     return {"type": "object", "additionalProperties": False, "properties": properties, "required": list(properties)}
 
@@ -205,7 +211,14 @@ async def analyze_document_with_ai(data: bytes, mime: str, filename: str) -> Pay
         output_text = next((content.get("text") for item in body.get("output", []) if item.get("type") == "message" for content in item.get("content", []) if content.get("type") == "output_text"), None)
         if not output_text:
             raise ValueError("missing output_text")
-        return PayslipAIResult.model_validate(json.loads(output_text))
+        parsed = json.loads(output_text)
+        evidence = parsed.get("fields") or []
+        if isinstance(evidence, list):
+            parsed["fields"] = {
+                item["field"]: {"confidence": item["confidence"], "evidence": item["evidence"]}
+                for item in evidence if isinstance(item, dict) and item.get("field")
+            }
+        return PayslipAIResult.model_validate(parsed)
     except (ValueError, TypeError, json.JSONDecodeError) as exc:
         raise PayslipAIError("INVALID_AI_RESPONSE") from exc
 
