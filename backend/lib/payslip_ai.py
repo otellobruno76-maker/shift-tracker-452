@@ -35,7 +35,23 @@ ERROR_STATUS = {
     "OPENAI_BAD_REQUEST": (502, "Richiesta al servizio AI non valida"),
     "OPENAI_TIMEOUT": (504, "Il servizio AI non ha risposto in tempo"),
     "INVALID_AI_RESPONSE": (502, "Risposta AI non valida"),
+    "OPENAI_SCHEMA_TOO_COMPLEX": (502, "Schema AI troppo complesso"),
+    "OPENAI_SCHEMA_REQUIRED": (502, "Schema AI con campi obbligatori non valido"),
+    "OPENAI_SCHEMA_UNSUPPORTED": (502, "Schema AI non supportato"),
 }
+
+
+def _safe_bad_request_code(error: dict) -> str:
+    """Classifica la risposta 400 senza restituire il testo, che potrebbe contenere input."""
+    message = str(error.get("message") or "").lower()
+    param = str(error.get("param") or "").lower()
+    if "too many" in message or "exceeds" in message and ("propert" in message or "schema" in message):
+        return "OPENAI_SCHEMA_TOO_COMPLEX"
+    if "required" in message and ("schema" in message or "propert" in message):
+        return "OPENAI_SCHEMA_REQUIRED"
+    if "schema" in message or "schema" in param:
+        return "OPENAI_SCHEMA_UNSUPPORTED"
+    return "OPENAI_BAD_REQUEST"
 
 
 class FieldEvidence(BaseModel):
@@ -200,7 +216,7 @@ async def analyze_document_with_ai(data: bytes, mime: str, filename: str) -> Pay
         elif response.status_code == 404 or "model" in error_code:
             code = "MODEL_NOT_AVAILABLE"
         else:
-            code = "OPENAI_BAD_REQUEST"
+            code = _safe_bad_request_code(error)
         raise PayslipAIError(code)
 
     try:

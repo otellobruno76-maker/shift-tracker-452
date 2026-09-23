@@ -99,6 +99,16 @@ def test_dato_ai_non_valido_viene_rifiutato():
         payslip_ai.PayslipAIResult(month=13, pay_type="unknown")
 
 
+@pytest.mark.parametrize("message,expected", [
+    ("Invalid schema: too many object properties", "OPENAI_SCHEMA_TOO_COMPLEX"),
+    ("Invalid schema: required must include every property", "OPENAI_SCHEMA_REQUIRED"),
+    ("Unsupported JSON schema keyword", "OPENAI_SCHEMA_UNSUPPORTED"),
+    ("Invalid image data", "OPENAI_BAD_REQUEST"),
+])
+def test_classificazione_errore_400_non_espone_il_messaggio(message, expected):
+    assert payslip_ai._safe_bad_request_code({"message": message}) == expected
+
+
 def test_errore_api_sicuro(monkeypatch):
     async def broken(*_args, **_kwargs):
         raise payslip_ai.PayslipAIError("OPENAI_BAD_REQUEST")
