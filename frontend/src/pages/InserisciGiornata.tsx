@@ -5,6 +5,7 @@ import {
   BookmarkPlus,
   ChevronLeft,
   Coffee,
+  CalendarOff,
   Hammer,
   Palmtree,
   Thermometer,
@@ -43,6 +44,8 @@ const TYPE_ICONS: Record<DayType, LucideIcon> = {
   ferie: Palmtree,
   malattia: Thermometer,
   permesso: Coffee,
+  rol: CalendarOff,
+  ex_festivita: CalendarOff,
   riposo: BedDouble,
 };
 

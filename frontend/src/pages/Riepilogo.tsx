@@ -16,7 +16,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { currentMonthKey, monthLabel, parseMonthKey } from "@/lib/dates";
 import { exportBackupFile, exportMonthCSV, exportMonthPDF } from "@/lib/export";
 import { fmtEUR, fmtHours } from "@/lib/hours";
-import { statsForMonth, statsForYear } from "@/lib/stats";
+import { monthlyReferenceEstimate, statsForMonth, statsForYear } from "@/lib/stats";
 import { compareMonthWithPayslip, type ComparisonRow } from "@/lib/payslipComparison";
 import { useDays, usePayslips, useSettings } from "@/lib/store";
 import { MONTHS_IT } from "@/lib/types";
@@ -37,6 +37,7 @@ export default function Riepilogo() {
   );
   const yearStats = useMemo(() => statsForYear(days, settings, year), [days, settings, year]);
   const pay = totals.pay;
+  const monthlyEstimate = monthlyReferenceEstimate(totals, settings);
   const payslip = payslips.find((item) => item.month === selectedMonth);
   const comparison = useMemo(() => payslip ? compareMonthWithPayslip(totals, payslip, settings) : [], [payslip, totals, settings]);
 
@@ -50,6 +51,8 @@ export default function Riepilogo() {
     ["Ferie", fmtGiorni(totals.ferieDays), "summary-ferie-days"],
     ["Malattia", fmtGiorni(totals.malattiaDays), "summary-malattia-days"],
     ["Permessi", fmtGiorni(totals.permessiDays), "summary-permessi-days"],
+    ["ROL", fmtGiorni(totals.rolDays), "summary-rol-days"],
+    ["Ex festività", fmtGiorni(totals.exFestivitaDays), "summary-former-holiday-days"],
     ["Reperibilità", fmtGiorni(totals.reperibilitaDays), "summary-reperibilita-days"],
     ["Trasferte", fmtGiorni(totals.trasferteDays), "summary-trasferte-days"],
   ];
@@ -99,7 +102,7 @@ export default function Riepilogo() {
                 <SummaryRow key={label} label={label} value={value} testid={testid} />
               ))}
             </div>
-            {totals.netMinutes === 0 && totals.workDays === 0 && totals.ferieDays === 0 && totals.malattiaDays === 0 && totals.permessiDays === 0 && totals.riposiDays === 0 && (
+            {totals.netMinutes === 0 && totals.workDays === 0 && totals.ferieDays === 0 && totals.malattiaDays === 0 && totals.permessiDays === 0 && totals.rolDays === 0 && totals.exFestivitaDays === 0 && totals.riposiDays === 0 && (
               <p className="mt-3 text-sm text-[#64748B]" data-testid="month-summary-empty">
                 Nessuna giornata registrata in questo mese.
               </p>
@@ -122,6 +125,12 @@ export default function Riepilogo() {
                 {settings.basePay <= 0 && settings.monthlyReferencePay > 0 ? (
                   <>
                     <SummaryRow label="Retribuzione mensile di riferimento" value={fmtEUR(settings.monthlyReferencePay)} testid="summary-monthly-reference" />
+                    {monthlyEstimate !== null ? (
+                      <>
+                        <SummaryRow label="STIMA DELL’APP maturata finora" value={fmtEUR(monthlyEstimate)} testid="summary-monthly-estimate" />
+                        <p className="mt-2 text-xs text-[#64748B]">Calcolata sulle ore ordinarie registrate rispetto alle {settings.payslipReferenceHours} ore mensili confermate. Non è una paga oraria né un importo letto dal cedolino.</p>
+                      </>
+                    ) : <p className="mt-2 text-sm text-[#B45309]">Per una stima progressiva servono anche le ore mensili di riferimento confermate.</p>}
                     <p className="mt-2 text-sm text-[#B45309]">Le maggiorazioni orarie non sono stimate perché manca una paga oraria confermata.</p>
                   </>
                 ) : <>
@@ -163,6 +172,7 @@ export default function Riepilogo() {
             <h2 className="font-heading text-lg font-extrabold text-[#0F172A]">Confronto mese e cedolino</h2>
             {!payslip ? <p className="mt-2 text-sm text-[#64748B]">Nessun cedolino salvato per questo mese.</p> : (
               <div className="mt-3 space-y-3">
+                {comparison.length === 0 && <p className="text-sm text-[#64748B]">Dati insufficienti per un confronto affidabile. Controlla o completa i dati del cedolino.</p>}
                 {comparison.map((row) => <ComparisonItem key={row.key} row={row} />)}
                 <p className="text-xs text-[#64748B]">Il confronto segnala possibili differenze da verificare: non stabilisce che il cedolino sia errato.</p>
               </div>
@@ -295,7 +305,7 @@ function ComparisonItem({ row }: { row: ComparisonRow }) {
   const value = (number: number | null) => number === null ? "dato non individuato" : `${number.toLocaleString("it-IT")} ${row.unit}`;
   return <article className={`rounded-xl border p-3 ${appearance.className}`} data-testid={`comparison-${row.key}`}>
     <h3 className="font-extrabold uppercase tracking-wide">{row.label}</h3>
-    <div className="mt-2 grid gap-1 text-sm text-[#334155]"><p>Registro: <b>{value(row.registerValue)}</b></p><p>Cedolino: <b>{value(row.payslipValue)}</b></p>{row.difference !== null && <p>Differenza: <b>{value(Math.abs(row.difference))}</b></p>}</div>
+    <div className="mt-2 grid gap-1 text-sm text-[#334155]"><p>{row.registerLabel ?? "Registrati nell’app"}: <b>{value(row.registerValue)}</b></p><p>{row.payslipLabel ?? "Rilevati nel cedolino"}: <b>{value(row.payslipValue)}</b></p>{row.difference !== null && <p>Differenza: <b>{value(Math.abs(row.difference))}</b></p>}</div>
     <p className="mt-2 font-bold">{appearance.icon} {appearance.title}</p>
     <p className="mt-1 text-sm leading-relaxed">{row.explanation}</p>
     {row.sourceDescription && <p className="mt-1 text-xs">Voce originale: {row.sourceDescription}</p>}

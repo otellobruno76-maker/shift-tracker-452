@@ -113,6 +113,8 @@ function monthPdfLines(days: DayEntry[], settings: Settings, monthKeyValue: stri
     ["Ferie", `${totals.ferieDays} giorni`],
     ["Malattia", `${totals.malattiaDays} giorni`],
     ["Permessi", `${totals.permessiDays} giorni`],
+    ["ROL", `${totals.rolDays} giorni`],
+    ["Ex festività", `${totals.exFestivitaDays} giorni`],
     ["Reperibilità", `${totals.reperibilitaDays} giorni`],
     ["Trasferte", `${totals.trasferteDays} giorni`],
   ];

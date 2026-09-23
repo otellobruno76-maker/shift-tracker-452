@@ -291,7 +291,7 @@ export default function ConfiguraCedolino() {
       <Dialog open={pendingSettings !== null} onOpenChange={() => undefined}>
         <DialogContent className="rounded-2xl" data-testid="settings-comparison-dialog">
           <DialogHeader><DialogTitle>Vuoi aggiornare le impostazioni?</DialogTitle></DialogHeader>
-          <p className="text-sm text-[#64748B]">Il cedolino è già salvato nello storico. Alcuni valori sono diversi da quelli configurati nell’app.</p>
+          <p className="text-sm text-[#64748B]">Il cedolino è già salvato nello storico. Dal cedolino abbiamo rilevato questi dati retributivi. Vuoi utilizzarli per migliorare le stime future? Nulla verrà cambiato senza la tua conferma.</p>
           {pendingSettings && <div className="max-h-52 space-y-2 overflow-y-auto rounded-xl bg-[#F8FAFC] p-3 text-sm">
             {pendingSettings.basePay !== undefined && pendingSettings.basePay !== settings.basePay && <p>Paga oraria: <b>{settings.basePay} → {pendingSettings.basePay} €/h</b></p>}
             {pendingSettings.monthlyReferencePay !== undefined && pendingSettings.monthlyReferencePay !== settings.monthlyReferencePay && <p>Retribuzione mensile: <b>{settings.monthlyReferencePay} → {pendingSettings.monthlyReferencePay} €</b></p>}

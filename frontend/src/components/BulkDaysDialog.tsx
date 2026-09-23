@@ -23,7 +23,7 @@ interface Props {
   onSaved: () => void;
 }
 
-const ABSENCE_TYPES: DayType[] = ["ferie", "malattia", "permesso", "riposo"];
+const ABSENCE_TYPES: DayType[] = ["ferie", "malattia", "permesso", "rol", "ex_festivita", "riposo"];
 
 export default function BulkDaysDialog({ open, dates, onOpenChange, onSaved }: Props) {
   const days = useDays();

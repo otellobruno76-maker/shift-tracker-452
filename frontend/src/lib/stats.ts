@@ -42,10 +42,24 @@ export interface Totals {
   ferieDays: number;
   malattiaDays: number;
   permessiDays: number;
+  rolDays: number;
+  exFestivitaDays: number;
   riposiDays: number;
   trasferteDays: number;
   reperibilitaDays: number;
   pay: PayBreakdown;
+}
+
+/**
+ * Stima progressiva della sola retribuzione mensile di riferimento.
+ * È disponibile esclusivamente quando importo e ore mensili sono stati
+ * confermati dall'utente; non viene trasformata in una paga oraria.
+ */
+export function monthlyReferenceEstimate(totals: Totals, settings: Settings): number | null {
+  const referenceHours = settings.payslipReferenceHours ?? 0;
+  if (settings.monthlyReferencePay <= 0 || referenceHours <= 0) return null;
+  const progress = Math.min(1, Math.max(0, totals.ordinaryMinutes / 60 / referenceHours));
+  return Math.round(settings.monthlyReferencePay * progress * 100) / 100;
 }
 
 export function isFestivoDay(entry: DayEntry, settings: Settings): boolean {
@@ -160,6 +174,8 @@ export function summarize(splits: EntrySplit[], settings: Settings): Totals {
   const ferie = new Set<string>();
   const malattia = new Set<string>();
   const permessi = new Set<string>();
+  const rol = new Set<string>();
+  const exFestivita = new Set<string>();
   const riposi = new Set<string>();
   const reperibilita = new Set<string>();
   const trasferte = new Set<string>();
@@ -187,6 +203,8 @@ export function summarize(splits: EntrySplit[], settings: Settings): Totals {
     } else if (s.entry.dayType === "ferie") ferie.add(d);
     else if (s.entry.dayType === "malattia") malattia.add(d);
     else if (s.entry.dayType === "permesso") permessi.add(d);
+    else if (s.entry.dayType === "rol") rol.add(d);
+    else if (s.entry.dayType === "ex_festivita") exFestivita.add(d);
     else riposi.add(d);
   }
 
@@ -200,6 +218,8 @@ export function summarize(splits: EntrySplit[], settings: Settings): Totals {
     ferieDays: ferie.size,
     malattiaDays: malattia.size,
     permessiDays: permessi.size,
+    rolDays: rol.size,
+    exFestivitaDays: exFestivita.size,
     riposiDays: riposi.size,
     trasferteDays: trasferte.size,
     reperibilitaDays: reperibilita.size,
@@ -218,6 +238,8 @@ export function emptyTotals(): Totals {
     ferieDays: 0,
     malattiaDays: 0,
     permessiDays: 0,
+    rolDays: 0,
+    exFestivitaDays: 0,
     riposiDays: 0,
     trasferteDays: 0,
     reperibilitaDays: 0,

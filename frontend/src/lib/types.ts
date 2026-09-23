@@ -1,7 +1,7 @@
 // Shared domain types for Registro Ore Lavoro. Data lives on the device
 // (IndexedDB); this module is the single source of truth for the shapes.
 
-export type DayType = "lavoro" | "ferie" | "malattia" | "permesso" | "riposo";
+export type DayType = "lavoro" | "ferie" | "malattia" | "permesso" | "rol" | "ex_festivita" | "riposo";
 
 export interface DayEntry {
   id: string;
@@ -176,10 +176,12 @@ export const DAY_TYPE_LABELS: Record<DayType, string> = {
   ferie: "Ferie",
   malattia: "Malattia",
   permesso: "Permesso",
+  rol: "ROL",
+  ex_festivita: "Ex festività",
   riposo: "Riposo",
 };
 
-export const DAY_TYPES: DayType[] = ["lavoro", "ferie", "malattia", "permesso", "riposo"];
+export const DAY_TYPES: DayType[] = ["lavoro", "ferie", "malattia", "permesso", "rol", "ex_festivita", "riposo"];
 
 /** pause rapide selezionabili in minuti */
 export const BREAK_PRESETS: number[] = [0, 15, 30, 45, 60];

@@ -104,7 +104,15 @@ export const repo = {
   async getPayslips(): Promise<PayslipRecord[]> {
     try {
       const value = await withStore<PayslipRecord[]>(STORE_KV, "readonly", (s) => s.get("payslips"));
-      return (value ?? []).slice().sort((a, b) => b.month.localeCompare(a.month));
+      return (value ?? []).map((record) => ({
+        ...record,
+        overtimeRates: Array.isArray(record.overtimeRates) ? record.overtimeRates : [],
+        overtimeTariffs: Array.isArray(record.overtimeTariffs) ? record.overtimeTariffs : [],
+        allowances: Array.isArray(record.allowances) ? record.allowances : [],
+        totals: Array.isArray(record.totals) ? record.totals : [],
+        items: Array.isArray(record.items) ? record.items : [],
+        fieldProvenance: record.fieldProvenance ?? {},
+      })).sort((a, b) => b.month.localeCompare(a.month));
     } catch {
       return [];
     }

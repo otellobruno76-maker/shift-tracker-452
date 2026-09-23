@@ -77,6 +77,8 @@ export function buildMonthCSV(
   rows.push(["Ferie (giorni)", String(t.ferieDays)]);
   rows.push(["Malattia (giorni)", String(t.malattiaDays)]);
   rows.push(["Permessi (giorni)", String(t.permessiDays)]);
+  rows.push(["ROL (giorni)", String(t.rolDays)]);
+  rows.push(["Ex festività (giorni)", String(t.exFestivitaDays)]);
   rows.push(["Riposo (giorni)", String(t.riposiDays)]);
   rows.push(["Reperibilità (giorni)", String(t.reperibilitaDays)]);
   rows.push(["Trasferte (giorni)", String(t.trasferteDays)]);

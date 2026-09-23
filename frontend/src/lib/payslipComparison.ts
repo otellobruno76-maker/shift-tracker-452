@@ -12,12 +12,22 @@ export interface ComparisonRow {
   status: ComparisonStatus;
   explanation: string;
   sourceDescription?: string;
+  registerLabel?: string;
+  payslipLabel?: string;
 }
 
 const round = (value: number) => Math.round(value * 100) / 100;
 const sum = (items: PayslipItem[], category: PayslipItem["category"], unit: PayslipItem["unit"]): number | null => {
   const values = items.filter((item) => item.category === category && item.unit === unit && item.quantity !== null && item.confidence !== "bassa");
   return values.length ? round(values.reduce((total, item) => total + (item.quantity ?? 0), 0)) : null;
+};
+const sumAmounts = (items: PayslipItem[], category: PayslipItem["category"]): number | null => {
+  const values = items.filter((item) => item.category === category && item.amount !== null && item.confidence !== "bassa");
+  return values.length ? round(values.reduce((total, item) => total + (item.amount ?? 0), 0)) : null;
+};
+const descriptions = (items: PayslipItem[], category: PayslipItem["category"]): string | undefined => {
+  const labels = [...new Set(items.filter((item) => item.category === category && item.confidence !== "bassa").map((item) => item.originalDescription).filter(Boolean))];
+  return labels.length ? labels.join(" · ") : undefined;
 };
 
 function compare(
@@ -67,17 +77,46 @@ export function compareMonthWithPayslip(totals: Totals, record: PayslipRecord, s
     compare("vacation", "Ferie", totals.ferieDays, quantity(record, "vacation", "days", daily), "giorni", 0.01),
     compare("permission", "Permessi", totals.permessiDays, quantity(record, "permission", "days", daily), "giorni", 0.01),
     compare("sickness", "Malattia", totals.malattiaDays, quantity(record, "sickness", "days", daily), "giorni", 0.01),
-    compare("rol", "ROL", null, quantity(record, "rol", "hours", daily), "h", 0.1),
-    compare("formerHoliday", "Ex festività", null, quantity(record, "former_holiday", "hours", daily), "h", 0.1),
+    compare("rol", "ROL", totals.rolDays, quantity(record, "rol", "days", daily), "giorni", 0.01, descriptions(record.items ?? [], "rol")),
+    compare("formerHoliday", "Ex festività", totals.exFestivitaDays, quantity(record, "former_holiday", "days", daily), "giorni", 0.01, descriptions(record.items ?? [], "former_holiday")),
   ];
   if (settings.basePay > 0 || record.basePay !== null) rows.push(compare("basePay", "Paga oraria di riferimento", settings.basePay > 0 ? settings.basePay : null, record.basePay, "€", 0.01));
   if (settings.monthlyReferencePay > 0 || (record.monthlyPay ?? null) !== null) rows.push(compare("monthlyPay", "Retribuzione mensile di riferimento", settings.monthlyReferencePay > 0 ? settings.monthlyReferencePay : null, record.monthlyPay ?? null, "€", 0.01));
-  if (settings.overtimePct > 0 || record.overtimeRates.length > 0) rows.push(compare("overtimeRate", "Maggiorazione straordinario", settings.overtimePct > 0 ? settings.overtimePct : null, record.overtimeRates[0] ?? null, "%", 0.01));
-  const overtimeItems = (record.items ?? []).filter((item) => item.category === "overtime" && item.ratePct !== null && item.quantity !== null);
-  for (const item of overtimeItems) {
-    rows.push(compare(`overtime-${item.ratePct}`, `Straordinario +${item.ratePct}%`, null, item.quantity, item.unit === "days" ? "giorni" : "h", 0.1, item.originalDescription));
+  const recordOvertimeRates = record.overtimeRates ?? [];
+  if (settings.overtimePct > 0 || recordOvertimeRates.length > 0) rows.push(compare("overtimeRate", "Maggiorazione straordinario", settings.overtimePct > 0 ? settings.overtimePct : null, recordOvertimeRates[0] ?? null, "%", 0.01));
+  const overtimeItems = (record.items ?? []).filter((item) => item.category === "overtime" && item.ratePct !== null && item.quantity !== null && item.confidence !== "bassa");
+  const uniqueOvertimeRates = new Set(overtimeItems.map((item) => item.ratePct));
+  for (const [index, item] of overtimeItems.entries()) {
+    const canMatchAllRegisteredOvertime = uniqueOvertimeRates.size === 1 && settings.overtimePct === item.ratePct;
+    rows.push(compare(`overtime-${item.ratePct}-${index}`, `Straordinario +${item.ratePct}%`, canMatchAllRegisteredOvertime ? hours(totals.overtimeMinutes) : null, item.quantity, item.unit === "days" ? "giorni" : "h", 0.1, item.originalDescription));
   }
-  return rows;
+
+  const items = record.items ?? [];
+  const absence = quantity(record, "absence", "days", daily);
+  if (absence !== null) rows.push(compare("otherAbsence", "Altre assenze", null, absence, "giorni", 0.01, descriptions(items, "absence")));
+
+  const allowanceItems = items.filter((item) => item.category === "allowance" && item.amount !== null && item.confidence !== "bassa");
+  for (const [index, item] of allowanceItems.entries()) {
+    const isStandby = /reperibil/i.test(item.originalDescription);
+    rows.push(compare(`allowance-${index}`, item.originalDescription || "Indennità", isStandby && totals.reperibilitaDays > 0 ? totals.pay.standbyAllowance : null, item.amount, "€", 0.01, item.originalDescription));
+  }
+
+  const appGross = settings.basePay > 0 ? totals.pay.total : null;
+  const payslipGross = record.grossTotal ?? sumAmounts(items, "gross") ?? sumAmounts(items, "earnings");
+  if (appGross !== null || payslipGross !== null) {
+    rows.push({ ...compare("gross", "Lordo / totale competenze", appGross, payslipGross, "€", 0.05, descriptions(items, "gross") ?? descriptions(items, "earnings")), registerLabel: "Stima dell’app", payslipLabel: "Importo letto nel cedolino" });
+  }
+  const appDeductions = settings.basePay > 0 && totals.pay.netEnabled ? round(totals.pay.total - totals.pay.net) : null;
+  const payslipDeductions = sumAmounts(items, "deductions") ?? record.totals.find((item) => /ritenut|trattenut/i.test(item.label))?.value ?? null;
+  if (appDeductions !== null || payslipDeductions !== null) {
+    rows.push({ ...compare("deductions", "Totale trattenute", appDeductions, payslipDeductions, "€", 0.05, descriptions(items, "deductions")), registerLabel: "Stima dell’app", payslipLabel: "Importo letto nel cedolino" });
+  }
+  const appNet = settings.basePay > 0 && totals.pay.netEnabled ? totals.pay.net : null;
+  const payslipNet = record.netTotal ?? sumAmounts(items, "net");
+  if (appNet !== null || payslipNet !== null) {
+    rows.push({ ...compare("net", "Netto", appNet, payslipNet, "€", 0.05, descriptions(items, "net")), registerLabel: "Stima dell’app", payslipLabel: "Importo letto nel cedolino" });
+  }
+  return rows.filter((row) => row.registerValue !== null && row.registerValue !== 0 || row.payslipValue !== null);
 }
 
 export function periodMatches(selectedMonth: string, record: PayslipRecord): boolean {

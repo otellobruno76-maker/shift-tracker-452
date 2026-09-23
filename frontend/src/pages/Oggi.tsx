@@ -7,7 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { buttonVariants } from "@/components/ui/button";
 import { currentMonthKey, fmtDateIt, parseMonthKey, todayISO } from "@/lib/dates";
 import { fmtEUR, fmtHours } from "@/lib/hours";
-import { entryNetMinutes, statsForMonth } from "@/lib/stats";
+import { entryNetMinutes, monthlyReferenceEstimate, statsForMonth } from "@/lib/stats";
 import { useDays, useSettings } from "@/lib/store";
 import { DAY_TYPE_LABELS } from "@/lib/types";
 import type { DayEntry } from "@/lib/types";
@@ -21,6 +21,7 @@ export default function Oggi() {
     () => statsForMonth(days, settings, year, month),
     [days, settings, year, month],
   );
+  const monthlyEstimate = monthlyReferenceEstimate(totals, settings);
   const today = todayISO();
   const todayEntries = days.filter((d) => d.date === today);
   const todayNet = todayEntries.reduce((sum, d) => sum + entryNetMinutes(d), 0);
@@ -119,13 +120,14 @@ export default function Oggi() {
           className="mt-1 text-3xl font-extrabold tabular-nums text-[#0F172A]"
           data-testid="metric-estimated-wage"
         >
-          {settings.basePay > 0 ? fmtEUR(totals.pay.total) : "—"}
+          {settings.basePay > 0 ? fmtEUR(totals.pay.total) : monthlyEstimate !== null ? fmtEUR(monthlyEstimate) : "—"}
         </p>
-        {settings.basePay <= 0 && (
+        {settings.basePay <= 0 && monthlyEstimate === null && (
           <p className="mt-1 text-sm text-[#B45309]">
-            Imposta la paga oraria in Impostazioni per vedere la stima.
+            Imposta la paga oraria oppure retribuzione e ore mensili di riferimento per vedere la stima.
           </p>
         )}
+        {settings.basePay <= 0 && monthlyEstimate !== null && <p className="mt-1 text-xs text-[#64748B]">STIMA DELL’APP maturata sulle ore ordinarie registrate. Non è un importo letto dal cedolino.</p>}
         {settings.basePay > 0 && totals.pay.netEnabled && (
           <p className="mt-1 text-sm font-bold text-[#15803D]" data-testid="estimated-net-wage">
             Stima netto: {fmtEUR(totals.pay.net)}

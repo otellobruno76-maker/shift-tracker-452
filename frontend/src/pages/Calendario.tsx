@@ -22,6 +22,8 @@ const TYPE_COLORS: Record<DayType, string> = {
   ferie: "text-[#3730A3]",
   malattia: "text-[#9D174D]",
   permesso: "text-[#EA580C]",
+  rol: "text-[#0F766E]",
+  ex_festivita: "text-[#7C3AED]",
   riposo: "text-[#64748B]",
 };
 
@@ -152,7 +154,7 @@ export default function Calendario() {
           const isSunday = weekdayIndex(iso) === 6;
           const isToday = iso === today;
           const altType = info
-            ? (["ferie", "malattia", "permesso", "riposo"] as DayType[]).find((t) =>
+            ? (["ferie", "malattia", "permesso", "rol", "ex_festivita", "riposo"] as DayType[]).find((t) =>
                 info.types.has(t),
               )
             : undefined;

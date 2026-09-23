@@ -28,10 +28,13 @@ describe("inserimento multiplo dal calendario", () => {
     expect(valuesFromTemplate(template)).toMatchObject({ start: "06:00", end: "14:30", breakMinutes: 30, reperibilita: true });
   });
 
-  it("azzera gli orari per ferie, malattia, permesso e riposo", () => {
+  it("azzera gli orari per ferie, malattia, permesso, ROL, ex festività e riposo", () => {
     const [entry] = buildBulkEntries(["2026-09-21"], {
       dayType: "ferie", start: "08:00", end: "17:00", breakMinutes: 60,
     });
     expect(entry).toMatchObject({ dayType: "ferie", start: "", end: "", breakMinutes: 0 });
+    for (const dayType of ["rol", "ex_festivita"] as const) {
+      expect(buildBulkEntries(["2026-09-22"], { dayType, start: "08:00", end: "17:00", breakMinutes: 60 })[0]).toMatchObject({ dayType, start: "", end: "", breakMinutes: 0 });
+    }
   });
 });

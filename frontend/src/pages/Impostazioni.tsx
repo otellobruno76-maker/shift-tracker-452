@@ -146,8 +146,15 @@ export default function Impostazioni() {
           testid="settings-monthly-pay"
           onCommit={(v) => saveSettings({ monthlyReferencePay: v })}
         />
+        <NumberField
+          label="Ore mensili di riferimento"
+          value={settings.payslipReferenceHours ?? 0}
+          suffix="h/mese"
+          testid="settings-monthly-reference-hours"
+          onCommit={(v) => saveSettings({ payslipReferenceHours: v > 0 ? v : null })}
+        />
         <p className="text-xs text-[#64748B]">
-          Paga oraria e retribuzione mensile restano distinte: l’app non ricava automaticamente l’una dall’altra.
+          Paga oraria e retribuzione mensile restano distinte. Le ore mensili servono solo per mostrare una stima progressiva della retribuzione mensile: l’app non le usa per inventare una paga oraria.
         </p>
         <NumberField
           label="Straordinario"

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { computeSplits, summarize } from "./stats";
+import { computeSplits, monthlyReferenceEstimate, summarize } from "./stats";
 import { DEFAULT_SETTINGS } from "./types";
 import type { DayEntry } from "./types";
 
@@ -62,6 +62,19 @@ describe("settimana lavorativa programmata", () => {
     expect(totals.ferieDays).toBe(1);
     expect(totals.netMinutes).toBe(0);
     expect(totals.ordinaryMinutes).toBe(0);
+  });
+
+  it("mantiene ROL ed ex festività come assenze distinte", () => {
+    const rol = { ...plannedDay("2026-09-23"), dayType: "rol" as const };
+    const exFestivita = { ...plannedDay("2026-09-24"), dayType: "ex_festivita" as const };
+    const totals = summarize(computeSplits([rol, exFestivita], DEFAULT_SETTINGS), DEFAULT_SETTINGS);
+    expect(totals).toMatchObject({ rolDays: 1, exFestivitaDays: 1, permessiDays: 0, netMinutes: 0 });
+  });
+
+  it("stima progressivamente la retribuzione mensile solo con ore confermate", () => {
+    const totals = { ...summarize(computeSplits([plannedDay("2026-09-21")], DEFAULT_SETTINGS), DEFAULT_SETTINGS), ordinaryMinutes: 80 * 60 };
+    expect(monthlyReferenceEstimate(totals, { ...DEFAULT_SETTINGS, monthlyReferencePay: 1600, payslipReferenceHours: 160 })).toBe(800);
+    expect(monthlyReferenceEstimate(totals, { ...DEFAULT_SETTINGS, monthlyReferencePay: 1600, payslipReferenceHours: null })).toBeNull();
   });
 
   it("divide 06:00–18:00 con 30 minuti in 8h ordinarie e 3h30 straordinarie", () => {
