@@ -117,6 +117,24 @@ class PayslipAIResult(BaseModel):
 def normalize_result(result: PayslipAIResult) -> PayslipAIResult:
     """Completa solo aggregati matematici già espliciti nelle voci strutturate."""
     updates: dict = {}
+    hourly_evidence = result.fields.get("hourly_pay")
+    inferred_hourly_source = re.compile(
+        r"dato\s+base|ripetut|(?:riga|voce).*(?:ferie|festivit|permess)|(?:ferie|festivit|permess).*(?:riga|voce)",
+        re.I,
+    )
+    # Un valore ricavato dal Dato Base di ferie/festività/permessi è un utile
+    # candidato orario, ma non equivale a una paga oraria esplicitamente
+    # dichiarata. La classificazione resta prudente anche se il modello usa
+    # impropriamente la parola "tariffa" nella propria parafrasi.
+    if (
+        result.hourly_pay is not None
+        and hourly_evidence
+        and hourly_evidence.confidence == "high"
+        and inferred_hourly_source.search(hourly_evidence.evidence)
+    ):
+        fields = dict(result.fields)
+        fields["hourly_pay"] = hourly_evidence.model_copy(update={"confidence": "medium"})
+        updates["fields"] = fields
     overtime_items = [item for item in result.line_items if item.category == "overtime" and item.confidence != "low"]
     if not result.overtime_rates:
         rates = sorted({item.rate_pct for item in overtime_items if item.rate_pct is not None})

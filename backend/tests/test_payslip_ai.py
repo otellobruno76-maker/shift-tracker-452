@@ -159,6 +159,22 @@ def test_normalizzazione_non_si_fida_della_parafrasi_ai_se_la_riga_non_indica_un
     assert payslip_ai.normalize_result(value).overtime_tariffs == []
 
 
+def test_normalizzazione_declassa_paga_oraria_ricavata_da_dato_base():
+    value = payslip_ai.PayslipAIResult(
+        pay_type="monthly",
+        hourly_pay=8.2826,
+        fields={
+            "hourly_pay": {
+                "confidence": "high",
+                "evidence": "Tariffa oraria 8,28260 EUR nella riga Festività e Ferie godute",
+            },
+        },
+    )
+    normalized = payslip_ai.normalize_result(value)
+    assert normalized.hourly_pay == 8.2826
+    assert normalized.fields["hourly_pay"].confidence == "medium"
+
+
 def test_errore_api_sicuro(monkeypatch):
     async def broken(*_args, **_kwargs):
         raise payslip_ai.PayslipAIError("OPENAI_BAD_REQUEST")
