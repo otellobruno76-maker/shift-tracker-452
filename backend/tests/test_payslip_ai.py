@@ -146,6 +146,19 @@ def test_normalizzazione_mantiene_tariffa_oraria_esplicita():
     assert payslip_ai.normalize_result(value).overtime_tariffs == [12.5]
 
 
+def test_normalizzazione_non_si_fida_della_parafrasi_ai_se_la_riga_non_indica_una_tariffa():
+    value = payslip_ai.PayslipAIResult(
+        pay_type="unknown", overtime_tariffs=[9.525],
+        fields={"overtime_tariffs": {"confidence": "high", "evidence": "Tariffa oraria straordinario 9,5250 EUR/ora"}},
+        line_items=[{
+            "original_description": "Straordinario +15%", "category": "overtime", "quantity": 3,
+            "unit": "hours", "rate_pct": 15, "amount": 28.58, "confidence": "high",
+            "evidence": "Riga Straordinario +15% 3,0000 9,5250 28,58",
+        }],
+    )
+    assert payslip_ai.normalize_result(value).overtime_tariffs == []
+
+
 def test_errore_api_sicuro(monkeypatch):
     async def broken(*_args, **_kwargs):
         raise payslip_ai.PayslipAIError("OPENAI_BAD_REQUEST")

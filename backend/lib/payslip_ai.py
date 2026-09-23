@@ -127,7 +127,15 @@ def normalize_result(result: PayslipAIResult) -> PayslipAIResult:
         if hours:
             updates["overtime_hours"] = round(sum(hours), 4)
     tariff_evidence = result.fields.get("overtime_tariffs")
-    explicit_tariff = bool(tariff_evidence and re.search(r"(?:€|eur)\s*/\s*h|euro\s*(?:all.?ora|ora)|tariffa\s+oraria", tariff_evidence.evidence, re.I))
+    tariff_label = re.compile(r"(?:€|eur)\s*/\s*h|euro\s*(?:all.?ora|ora)|tariffa\s+(?:oraria|straordinar)|paga\s+oraria|retribuzione\s+oraria", re.I)
+    # Se l'AI ha restituito le righe strutturate, la descrizione originale è
+    # più affidabile della sua parafrasi nell'evidence. Un semplice "Dato Base"
+    # sotto una voce Straordinario non diventa quindi una tariffa esplicita.
+    explicit_tariff = (
+        any(tariff_label.search(item.original_description) for item in overtime_items)
+        if overtime_items
+        else bool(tariff_evidence and tariff_label.search(tariff_evidence.evidence))
+    )
     if result.overtime_tariffs and not explicit_tariff:
         updates["overtime_tariffs"] = []
     aggregate_items = {
