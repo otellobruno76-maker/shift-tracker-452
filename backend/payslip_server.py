@@ -11,7 +11,7 @@ import os
 from fastapi import APIRouter, FastAPI
 from starlette.middleware.cors import CORSMiddleware
 
-from lib.payslip_ai import router as payslip_ai_router
+from lib.payslip_ai import router as payslip_ai_router, safe_metrics
 
 
 def _cors_origins() -> list[str]:
@@ -31,6 +31,11 @@ async def health() -> dict[str, str]:
         "model": os.getenv("OPENAI_PAYSLIP_MODEL", "gpt-4.1-mini"),
         "revision": os.getenv("RENDER_GIT_COMMIT", "local"),
     }
+
+
+@api_router.get("/metrics")
+async def metrics() -> dict[str, int]:
+    return safe_metrics()
 
 
 app.include_router(api_router)

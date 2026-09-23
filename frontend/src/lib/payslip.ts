@@ -1,4 +1,4 @@
-import type { Settings } from "./types";
+import type { PayslipItem, Settings } from "./types";
 
 export type Confidence = "alta" | "media" | "bassa";
 
@@ -42,10 +42,12 @@ export interface PayslipAnalysis {
   level: DetectedValue<string>;
   totalElementsPay: DetectedValue<number>;
   totals: Array<{ label: string; value: number; source: string }>;
+  items: PayslipItem[];
 }
 
 export interface ConfirmedPayslipValues {
   basePay?: number;
+  monthlyPay?: number;
   ordinaryHours?: number;
   overtimeRates?: number[];
   nightPct?: number;
@@ -65,7 +67,7 @@ export function emptyPayslipAnalysis(): PayslipAnalysis {
     ordinaryHours: missingNumber(), workedHours: missingNumber(), workedDays: missingNumber(),
     overtimeHours: missingNumber(), overtimeTariffs: [], overtimeRates: [], nightPct: missingNumber(),
     holidayPct: missingNumber(), allowances: [], ccnl: missingText(), level: missingText(),
-    totalElementsPay: missingNumber(), totals: [],
+    totalElementsPay: missingNumber(), totals: [], items: [],
   };
 }
 
@@ -325,12 +327,14 @@ export function analyzePayslipText(rawText: string): PayslipAnalysis {
     level,
     totalElementsPay: firstNumberAfter(lines, /totale\s+elementi\s+retributivi/i, 100, 30000),
     totals: totals.slice(0, 6),
+    items: [],
   };
 }
 
 export function buildPayslipSettingsPatch(values: ConfirmedPayslipValues): Partial<Settings> {
   const patch: Partial<Settings> = { payslipConfiguredAt: new Date().toISOString() };
   if (values.basePay !== undefined) patch.basePay = values.basePay;
+  if (values.monthlyPay !== undefined) patch.monthlyReferencePay = values.monthlyPay;
   if (values.ordinaryHours !== undefined) patch.payslipReferenceHours = values.ordinaryHours;
   if (values.overtimeRates?.length) {
     patch.overtimeRates = values.overtimeRates;

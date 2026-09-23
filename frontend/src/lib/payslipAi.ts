@@ -1,4 +1,5 @@
 import { emptyPayslipAnalysis, type Confidence, type DetectedValue, type PayslipAnalysis } from "./payslip";
+import type { PayslipItem } from "./types";
 
 export interface AIFieldEvidence { confidence: "high" | "medium" | "low"; evidence: string }
 export interface PayslipAIResult {
@@ -11,6 +12,11 @@ export interface PayslipAIResult {
   seniority_increments: number | null; allowances: Array<{ name: string; amount: number | null }>;
   gross_pay: number | null; total_earnings: number | null; total_deductions: number | null; net_pay: number | null;
   fields: Record<string, AIFieldEvidence>;
+  line_items: Array<{
+    original_description: string; category: PayslipItem["category"]; quantity: number | null;
+    unit: PayslipItem["unit"]; rate_pct: number | null; amount: number | null;
+    confidence: "high" | "medium" | "low"; evidence: string;
+  }>;
 }
 
 export interface PayslipMergeResult { analysis: PayslipAnalysis; conflicts: string[]; month: string | null; payType: "oraria" | "giornaliera" | "mensile" | "" }
@@ -69,6 +75,17 @@ export function mergePayslipAnalyses(local: PayslipAnalysis, ai: PayslipAIResult
   merged.totals = [...local.totals, ...aiTotals.filter(([, value]) => value !== null).map(([label, value, key]) => ({ label, value: value!, source: `Analisi AI: ${ai.fields[key]?.evidence || "totale nel documento"}` }))]
     .filter((item, index, items) => items.findIndex((candidate) => candidate.label.toLowerCase() === item.label.toLowerCase() && same(candidate.value, item.value)) === index);
   merged.extraFields = { ...(local.extraFields ?? {}), employmentType: aiField(ai.employment_type, "employment_type", ai), minimumContractualPay: aiField(ai.minimum_contractual_pay, "minimum_contractual_pay", ai), contingency: aiField(ai.contingency, "contingency", ai), edr: aiField(ai.edr, "edr", ai), seniorityIncrements: aiField(ai.seniority_increments, "seniority_increments", ai) };
+  merged.items = (ai.line_items ?? []).map((item) => ({
+    originalDescription: item.original_description,
+    category: item.category,
+    quantity: item.quantity,
+    unit: item.unit,
+    ratePct: item.rate_pct,
+    amount: item.amount,
+    confidence: confidenceMap[item.confidence],
+    source: "ai",
+    note: item.evidence,
+  }));
   const month = ai.month && ai.year ? `${ai.year}-${String(ai.month).padStart(2, "0")}` : null;
   const payType = ai.pay_type === "hourly" ? "oraria" : ai.pay_type === "daily" ? "giornaliera" : ai.pay_type === "monthly" ? "mensile" : "";
   return { analysis: merged, conflicts, month, payType };

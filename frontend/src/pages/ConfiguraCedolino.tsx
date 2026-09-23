@@ -98,12 +98,14 @@ export default function ConfiguraCedolino() {
   };
 
   const confirm = () => {
-    if (!review) return;
+    if (!review || !analysis) return;
+    const detectedAnalysis = analysis;
     const chosen = review.selected;
     const hasValue = (key: keyof ReviewState) => String(review[key] ?? "").trim() !== "";
     const values: Parameters<typeof buildPayslipSettingsPatch>[0] = {};
     const numericFields = [
       ["basePay", review.basePay],
+      ["monthlyPay", review.monthlyPay],
       ["ordinaryHours", review.ordinaryHours],
       ["nightPct", review.nightPct],
       ["holidayPct", review.holidayPct],
@@ -171,6 +173,11 @@ export default function ConfiguraCedolino() {
       ccnl: chosen.ccnl ? review.ccnl.trim() : "",
       level: chosen.level ? review.level.trim() : "",
       totals: review.totals,
+      items: review.items,
+      fieldProvenance: Object.fromEntries(Object.entries(review.selected).filter(([, selected]) => selected).map(([key]) => [key, {
+        source: review.edited[key] ? "manuale" : detectedAnalysis[key as keyof PayslipAnalysis] && typeof detectedAnalysis[key as keyof PayslipAnalysis] === "object" && "source" in (detectedAnalysis[key as keyof PayslipAnalysis] as object) && String((detectedAnalysis[key as keyof PayslipAnalysis] as { source?: string }).source).startsWith("Analisi AI") ? "ai" : "locale",
+        confidence: "media",
+      }])),
       uploadedAt: replaced?.uploadedAt ?? now,
       updatedAt: now,
     };
@@ -287,6 +294,7 @@ export default function ConfiguraCedolino() {
           <p className="text-sm text-[#64748B]">Il cedolino è già salvato nello storico. Alcuni valori sono diversi da quelli configurati nell’app.</p>
           {pendingSettings && <div className="max-h-52 space-y-2 overflow-y-auto rounded-xl bg-[#F8FAFC] p-3 text-sm">
             {pendingSettings.basePay !== undefined && pendingSettings.basePay !== settings.basePay && <p>Paga oraria: <b>{settings.basePay} → {pendingSettings.basePay} €/h</b></p>}
+            {pendingSettings.monthlyReferencePay !== undefined && pendingSettings.monthlyReferencePay !== settings.monthlyReferencePay && <p>Retribuzione mensile: <b>{settings.monthlyReferencePay} → {pendingSettings.monthlyReferencePay} €</b></p>}
             {pendingSettings.overtimePct !== undefined && pendingSettings.overtimePct !== settings.overtimePct && <p>Straordinario: <b>{settings.overtimePct}% → {pendingSettings.overtimePct}%</b></p>}
             {pendingSettings.nightPct !== undefined && pendingSettings.nightPct !== settings.nightPct && <p>Notturno: <b>{settings.nightPct}% → {pendingSettings.nightPct}%</b></p>}
             {pendingSettings.holidayPct !== undefined && pendingSettings.holidayPct !== settings.holidayPct && <p>Festivo: <b>{settings.holidayPct}% → {pendingSettings.holidayPct}%</b></p>}

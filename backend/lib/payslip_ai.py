@@ -7,6 +7,8 @@ import json
 import logging
 import os
 import tempfile
+import time
+from collections import Counter
 from pathlib import Path
 from typing import Literal
 
@@ -18,6 +20,7 @@ router = APIRouter()
 MAX_PAYSLIP_BYTES = 15 * 1024 * 1024
 ALLOWED_MIME = {"application/pdf", "image/jpeg", "image/png", "image/webp"}
 logger = logging.getLogger(__name__)
+_metrics = Counter()
 
 
 class PayslipAIError(RuntimeError):
@@ -43,6 +46,21 @@ class FieldEvidence(BaseModel):
 class Allowance(BaseModel):
     name: str
     amount: float | None = None
+
+
+class PayslipLineItem(BaseModel):
+    original_description: str
+    category: Literal[
+        "ordinary", "overtime", "holiday", "night", "vacation", "permission", "rol",
+        "former_holiday", "sickness", "absence", "allowance", "gross", "earnings",
+        "deductions", "net", "other",
+    ]
+    quantity: float | None = Field(default=None, ge=0)
+    unit: Literal["hours", "days", "euro", "percent", "unknown"] = "unknown"
+    rate_pct: float | None = Field(default=None, ge=0)
+    amount: float | None = Field(default=None)
+    confidence: Literal["high", "medium", "low"]
+    evidence: str
 
 
 class PayslipAIResult(BaseModel):
@@ -76,6 +94,7 @@ class PayslipAIResult(BaseModel):
     total_deductions: float | None = Field(default=None, ge=0)
     net_pay: float | None = Field(default=None, ge=0)
     fields: dict[str, FieldEvidence] = Field(default_factory=dict)
+    line_items: list[PayslipLineItem] = Field(default_factory=list)
 
 
 SYSTEM_PROMPT = """Sei un analizzatore prudente di cedolini paga italiani.
@@ -87,6 +106,8 @@ Una tariffa ipotizzata da Dato Base deve avere confidence medium o low.
 Non convertire una retribuzione mensile in paga oraria.
 Riconosci sinonimi e abbreviazioni italiane e controlla la coerenza matematica quando possibile.
 Non estrarre né restituire codice fiscale, IBAN, indirizzo, conto corrente o dati personali non richiesti.
+Per ogni voce utile conserva la descrizione originale in line_items e normalizzala nella categoria prevista.
+Non sommare concetti semanticamente diversi e indica sempre unità, confidence ed evidence.
 Restituisci esclusivamente lo schema JSON richiesto."""
 
 
@@ -114,6 +135,16 @@ def _schema() -> dict:
         "overtime_rates": {"type": "array", "items": {"type": "number"}},
         "overtime_tariffs": {"type": "array", "items": {"type": "number"}},
         "allowances": {"type": "array", "items": {"type": "object", "additionalProperties": False, "properties": {"name": {"type": "string"}, "amount": nullable_number}, "required": ["name", "amount"]}},
+        "line_items": {"type": "array", "items": {"type": "object", "additionalProperties": False, "properties": {
+            "original_description": {"type": "string"},
+            "category": {"type": "string", "enum": ["ordinary", "overtime", "holiday", "night", "vacation", "permission", "rol", "former_holiday", "sickness", "absence", "allowance", "gross", "earnings", "deductions", "net", "other"]},
+            "quantity": nullable_number,
+            "unit": {"type": "string", "enum": ["hours", "days", "euro", "percent", "unknown"]},
+            "rate_pct": nullable_number,
+            "amount": nullable_number,
+            "confidence": {"type": "string", "enum": ["high", "medium", "low"]},
+            "evidence": {"type": "string"},
+        }, "required": ["original_description", "category", "quantity", "unit", "rate_pct", "amount", "confidence", "evidence"]}},
         "fields": {"type": "object", "additionalProperties": False, "properties": {key: evidence_schema for key in field_names}, "required": list(field_names)},
     }
     return {"type": "object", "additionalProperties": False, "properties": properties, "required": list(properties)}
@@ -168,6 +199,9 @@ async def analyze_document_with_ai(data: bytes, mime: str, filename: str) -> Pay
 
     try:
         body = response.json()
+        usage = body.get("usage") or {}
+        _metrics["input_tokens"] += int(usage.get("input_tokens") or 0)
+        _metrics["output_tokens"] += int(usage.get("output_tokens") or 0)
         output_text = next((content.get("text") for item in body.get("output", []) if item.get("type") == "message" for content in item.get("content", []) if content.get("type") == "output_text"), None)
         if not output_text:
             raise ValueError("missing output_text")
@@ -178,6 +212,8 @@ async def analyze_document_with_ai(data: bytes, mime: str, filename: str) -> Pay
 
 @router.post("/analyze-payslip-ai", response_model=PayslipAIResult)
 async def analyze_payslip_ai(file: UploadFile = File(...)) -> PayslipAIResult:
+    started = time.monotonic()
+    _metrics["analyses"] += 1
     mime = (file.content_type or "").lower()
     if mime not in ALLOWED_MIME:
         raise HTTPException(status_code=415, detail="Formato documento non supportato")
@@ -194,15 +230,25 @@ async def analyze_payslip_ai(file: UploadFile = File(...)) -> PayslipAIResult:
         with tempfile.NamedTemporaryFile(prefix="payslip-", suffix=suffix, delete=False) as temporary:
             temporary.write(data)
             temporary_path = temporary.name
-        return await analyze_document_with_ai(data, mime, Path(file.filename or "documento").name)
+        result = await analyze_document_with_ai(data, mime, Path(file.filename or "documento").name)
+        _metrics["success"] += 1
+        return result
     except PayslipAIError as exc:
         code = str(exc)
         status, message = ERROR_STATUS.get(code, (502, "Analisi AI temporaneamente non disponibile"))
         logger.warning("payslip_ai_failure code=%s mime=%s size=%d", code, mime, len(data))
+        _metrics["failure"] += 1
         raise HTTPException(status_code=status, detail={"code": code, "message": message}) from exc
     except Exception as exc:
         logger.exception("payslip_ai_failure code=INVALID_AI_RESPONSE mime=%s size=%d", mime, len(data))
+        _metrics["failure"] += 1
         raise HTTPException(status_code=502, detail={"code": "INVALID_AI_RESPONSE", "message": "Risposta AI non valida"}) from exc
     finally:
+        _metrics["latency_ms_total"] += round((time.monotonic() - started) * 1000)
         if temporary_path:
             Path(temporary_path).unlink(missing_ok=True)
+
+
+def safe_metrics() -> dict[str, int]:
+    """Aggregati tecnici: nessun nome file, contenuto o identificativo personale."""
+    return {key: int(_metrics[key]) for key in ("analyses", "success", "failure", "latency_ms_total", "retries", "input_tokens", "output_tokens")}

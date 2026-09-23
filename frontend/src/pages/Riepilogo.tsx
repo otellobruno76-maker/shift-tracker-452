@@ -17,7 +17,8 @@ import { currentMonthKey, monthLabel, parseMonthKey } from "@/lib/dates";
 import { exportBackupFile, exportMonthCSV, exportMonthPDF } from "@/lib/export";
 import { fmtEUR, fmtHours } from "@/lib/hours";
 import { statsForMonth, statsForYear } from "@/lib/stats";
-import { useDays, useSettings } from "@/lib/store";
+import { compareMonthWithPayslip, type ComparisonRow } from "@/lib/payslipComparison";
+import { useDays, usePayslips, useSettings } from "@/lib/store";
 import { MONTHS_IT } from "@/lib/types";
 
 function fmtGiorni(n: number): string {
@@ -27,6 +28,7 @@ function fmtGiorni(n: number): string {
 export default function Riepilogo() {
   const days = useDays();
   const settings = useSettings();
+  const payslips = usePayslips();
   const [selectedMonth, setSelectedMonth] = useState(currentMonthKey());
   const { year, month } = parseMonthKey(selectedMonth);
   const totals = useMemo(
@@ -35,6 +37,8 @@ export default function Riepilogo() {
   );
   const yearStats = useMemo(() => statsForYear(days, settings, year), [days, settings, year]);
   const pay = totals.pay;
+  const payslip = payslips.find((item) => item.month === selectedMonth);
+  const comparison = useMemo(() => payslip ? compareMonthWithPayslip(totals, payslip, settings) : [], [payslip, totals, settings]);
 
   const oreRows: Array<[string, string, string]> = [
     ["Giorni lavorati", String(totals.workDays), "summary-work-days"],
@@ -109,12 +113,18 @@ export default function Riepilogo() {
             <h2 className="font-heading text-lg font-extrabold text-[#0F172A]">
               Compenso stimato
             </h2>
-            {settings.basePay <= 0 ? (
+            {settings.basePay <= 0 && settings.monthlyReferencePay <= 0 ? (
               <p className="mt-2 text-sm text-[#B45309]" data-testid="wage-not-configured">
-                Imposta la paga oraria in Impostazioni per vedere la stima retribuzione.
+                Imposta la paga oraria o la retribuzione mensile di riferimento per vedere una stima.
               </p>
             ) : (
               <div className="mt-2">
+                {settings.basePay <= 0 && settings.monthlyReferencePay > 0 ? (
+                  <>
+                    <SummaryRow label="Retribuzione mensile di riferimento" value={fmtEUR(settings.monthlyReferencePay)} testid="summary-monthly-reference" />
+                    <p className="mt-2 text-sm text-[#B45309]">Le maggiorazioni orarie non sono stimate perché manca una paga oraria confermata.</p>
+                  </>
+                ) : <>
                 <SummaryRow label="Compenso base" value={fmtEUR(pay.base)} testid="summary-pay-base" />
                 {payRowsVisible.map(([label, value]) => (
                   <SummaryRow key={label} label={label} value={fmtEUR(value)} testid={`summary-pay-${payRows.findIndex((r) => r[0] === label)}`} />
@@ -141,11 +151,22 @@ export default function Riepilogo() {
                     Nessuna maggiorazione configurata: puoi impostarla in Impostazioni.
                   </p>
                 )}
+                </>}
               </div>
             )}
             <p className="mt-3 text-xs text-[#64748B]">
               Stima indicativa, non sostituisce la busta paga.
             </p>
+          </section>
+
+          <section className="mt-3 rounded-2xl border border-[#E2E5EA] bg-white p-5 shadow-sm" data-testid="payslip-comparison-card">
+            <h2 className="font-heading text-lg font-extrabold text-[#0F172A]">Confronto mese e cedolino</h2>
+            {!payslip ? <p className="mt-2 text-sm text-[#64748B]">Nessun cedolino salvato per questo mese.</p> : (
+              <div className="mt-3 space-y-3">
+                {comparison.map((row) => <ComparisonItem key={row.key} row={row} />)}
+                <p className="text-xs text-[#64748B]">Il confronto segnala possibili differenze da verificare: non stabilisce che il cedolino sia errato.</p>
+              </div>
+            )}
           </section>
 
           <section
@@ -263,4 +284,20 @@ function SummaryRow({ label, value, testid }: { label: string; value: string; te
       <span className="font-bold tabular-nums text-[#0F172A]">{value}</span>
     </div>
   );
+}
+
+function ComparisonItem({ row }: { row: ComparisonRow }) {
+  const appearance = row.status === "coerente"
+    ? { icon: "✓", title: "Coerente", className: "border-[#BBF7D0] bg-[#F0FDF4] text-[#166534]" }
+    : row.status === "differenza"
+      ? { icon: "⚠", title: "Possibile differenza", className: "border-[#FDE68A] bg-[#FFFBEB] text-[#92400E]" }
+      : { icon: "?", title: "Dato insufficiente / da verificare", className: "border-[#CBD5E1] bg-[#F8FAFC] text-[#475569]" };
+  const value = (number: number | null) => number === null ? "dato non individuato" : `${number.toLocaleString("it-IT")} ${row.unit}`;
+  return <article className={`rounded-xl border p-3 ${appearance.className}`} data-testid={`comparison-${row.key}`}>
+    <h3 className="font-extrabold uppercase tracking-wide">{row.label}</h3>
+    <div className="mt-2 grid gap-1 text-sm text-[#334155]"><p>Registro: <b>{value(row.registerValue)}</b></p><p>Cedolino: <b>{value(row.payslipValue)}</b></p>{row.difference !== null && <p>Differenza: <b>{value(Math.abs(row.difference))}</b></p>}</div>
+    <p className="mt-2 font-bold">{appearance.icon} {appearance.title}</p>
+    <p className="mt-1 text-sm leading-relaxed">{row.explanation}</p>
+    {row.sourceDescription && <p className="mt-1 text-xs">Voce originale: {row.sourceDescription}</p>}
+  </article>;
 }

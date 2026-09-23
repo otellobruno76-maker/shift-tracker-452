@@ -15,7 +15,7 @@ const ai = (patch: Partial<PayslipAIResult> = {}): PayslipAIResult => ({
     qualification: { confidence: "high", evidence: "colonna Qualifica" }, level: { confidence: "high", evidence: "colonna Livello" },
     contract_code: { confidence: "high", evidence: "colonna Contratto" }, part_time_pct: { confidence: "high", evidence: "colonna %Part-Time" },
     monthly_pay: { confidence: "high", evidence: "Retribuzione mese" }, hourly_pay: { confidence: "medium", evidence: "Dato Base ripetuto in due voci orarie" },
-  }, ...patch,
+  }, line_items: [], ...patch,
 });
 
 describe("diagnostica endpoint AI", () => {

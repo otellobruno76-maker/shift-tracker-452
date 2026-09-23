@@ -1,4 +1,5 @@
 import type { Confidence, DetectedAllowance, PayslipAnalysis } from "./payslip";
+import type { PayslipItem } from "./types";
 
 export interface ReviewState {
   month: string; payType: "oraria" | "giornaliera" | "mensile" | "";
@@ -8,8 +9,10 @@ export interface ReviewState {
   netTotal: string; overtimeHours: string; overtimeTariffs: string; overtimeRates: string;
   nightPct: string; holidayPct: string; ccnl: string; level: string;
   selected: Record<string, boolean>;
+  edited: Record<string, boolean>;
   allowances: Array<DetectedAllowance & { selected: boolean; amountText: string }>;
   totals: Array<{ label: string; value: number }>;
+  items: PayslipItem[];
 }
 
 const displayNumber = (value: number | null): string => value === null ? "" : String(value).replace(".", ",");
@@ -26,7 +29,7 @@ export function initialReview(analysis: PayslipAnalysis, month: string, configur
     overtimeHours: displayNumber(analysis.overtimeHours.value), overtimeTariffs: analysis.overtimeTariffs.map((item) => displayNumber(item.value)).join("; "),
     overtimeRates: analysis.overtimeRates.map((rate) => displayNumber(rate.value)).join(", "), nightPct: displayNumber(analysis.nightPct.value), holidayPct: displayNumber(analysis.holidayPct.value),
     ccnl: analysis.ccnl.value ?? "", level: analysis.level.value ?? "",
-    selected: {
+    edited: {}, selected: {
       qualification: selected(analysis.qualification.value, analysis.qualification.confidence), contractCode: selected(analysis.contractCode.value, analysis.contractCode.confidence),
       partTimePct: selected(analysis.partTimePct.value, analysis.partTimePct.confidence), basePay: selected(analysis.basePay.value, analysis.basePay.confidence),
       dailyPay: selected(analysis.dailyPay.value, analysis.dailyPay.confidence), monthlyPay: selected(analysis.monthlyPay.value, analysis.monthlyPay.confidence),
@@ -38,10 +41,10 @@ export function initialReview(analysis: PayslipAnalysis, month: string, configur
       holidayPct: selected(analysis.holidayPct.value, analysis.holidayPct.confidence), ccnl: selected(analysis.ccnl.value, analysis.ccnl.confidence), level: selected(analysis.level.value, analysis.level.confidence),
     },
     allowances: analysis.allowances.map((allowance) => ({ ...allowance, selected: allowance.confidence !== "bassa", amountText: displayNumber(allowance.amount) })),
-    totals: analysis.totals.map(({ label, value }) => ({ label, value })),
+    totals: analysis.totals.map(({ label, value }) => ({ label, value })), items: analysis.items,
   };
 }
 
 export function updateReviewValue<K extends keyof ReviewState>(state: ReviewState, key: K, value: ReviewState[K]): ReviewState {
-  return { ...state, [key]: value, selected: { ...state.selected, [key]: String(value).trim() !== "" } };
+  return { ...state, [key]: value, selected: { ...state.selected, [key]: String(value).trim() !== "" }, edited: { ...state.edited, [key]: true } };
 }

@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 import pytest
+from pydantic import ValidationError
 
 from lib import payslip_ai
 from payslip_server import app as payslip_app
@@ -74,12 +75,28 @@ def test_risposta_ai_valida(monkeypatch):
     assert body["daily_pay"] is None
 
 
+def test_voci_normalizzate_conservano_descrizione_originale(monkeypatch):
+    install_success(monkeypatch, result(line_items=[{
+        "original_description": "Straord. 15%", "category": "overtime", "quantity": 4,
+        "unit": "hours", "rate_pct": 15, "amount": 55, "confidence": "high",
+        "evidence": "riga Straord. 15%",
+    }]))
+    body = app_client().post("/api/analyze-payslip-ai", files={"file": ("x.pdf", b"%PDF-ok", "application/pdf")}).json()
+    assert body["line_items"][0]["original_description"] == "Straord. 15%"
+    assert body["line_items"][0]["category"] == "overtime"
+
+
 def test_risposta_ai_incompleta_resta_null(monkeypatch):
     install_success(monkeypatch, payslip_ai.PayslipAIResult(pay_type="unknown"))
     body = app_client().post("/api/analyze-payslip-ai", files={"file": ("x.pdf", b"%PDF-ok", "application/pdf")}).json()
     assert body["hourly_pay"] is None
     assert body["level"] is None
     assert body["overtime_rates"] == []
+
+
+def test_dato_ai_non_valido_viene_rifiutato():
+    with pytest.raises(ValidationError):
+        payslip_ai.PayslipAIResult(month=13, pay_type="unknown")
 
 
 def test_errore_api_sicuro(monkeypatch):
@@ -96,6 +113,14 @@ def test_assenza_chiave_api(monkeypatch):
     response = app_client().post("/api/analyze-payslip-ai", files={"file": ("x.pdf", b"%PDF-ok", "application/pdf")})
     assert response.status_code == 503
     assert response.json()["detail"]["code"] == "AI_NOT_CONFIGURED"
+
+
+def test_metriche_non_contengono_segreti_o_dati_documento(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "secret-di-test-da-non-esporre")
+    payload = TestClient(payslip_app).get("/api/metrics").json()
+    serialized = str(payload)
+    assert "secret-di-test" not in serialized
+    assert set(payload) == {"analyses", "success", "failure", "latency_ms_total", "retries", "input_tokens", "output_tokens"}
 
 
 @pytest.mark.parametrize("code,status", [

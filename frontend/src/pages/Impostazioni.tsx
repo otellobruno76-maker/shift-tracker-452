@@ -140,6 +140,16 @@ export default function Impostazioni() {
           onCommit={(v) => saveSettings({ basePay: v })}
         />
         <NumberField
+          label="Retribuzione mensile di riferimento"
+          value={settings.monthlyReferencePay}
+          suffix="€/mese"
+          testid="settings-monthly-pay"
+          onCommit={(v) => saveSettings({ monthlyReferencePay: v })}
+        />
+        <p className="text-xs text-[#64748B]">
+          Paga oraria e retribuzione mensile restano distinte: l’app non ricava automaticamente l’una dall’altra.
+        </p>
+        <NumberField
           label="Straordinario"
           value={settings.overtimePct}
           suffix="%"

@@ -72,8 +72,37 @@ export interface PayslipRecord {
   ccnl: string;
   level: string;
   totals: Array<{ label: string; value: number }>;
+  /** Voci originali del cedolino normalizzate per confronti deterministici. */
+  items?: PayslipItem[];
+  /** Provenienza dei campi confermati (locale, AI o modifica manuale). */
+  fieldProvenance?: Record<string, PayslipFieldProvenance>;
   uploadedAt: string;
   updatedAt: string;
+}
+
+export type PayslipItemCategory =
+  | "ordinary" | "overtime" | "holiday" | "night" | "vacation"
+  | "permission" | "rol" | "former_holiday" | "sickness" | "absence"
+  | "allowance" | "gross" | "earnings" | "deductions" | "net" | "other";
+export type PayslipItemUnit = "hours" | "days" | "euro" | "percent" | "unknown";
+export type PayslipDataSource = "registro" | "locale" | "ai" | "manuale";
+
+export interface PayslipItem {
+  originalDescription: string;
+  category: PayslipItemCategory;
+  quantity: number | null;
+  unit: PayslipItemUnit;
+  ratePct: number | null;
+  amount: number | null;
+  confidence: "alta" | "media" | "bassa";
+  source: PayslipDataSource;
+  note?: string;
+}
+
+export interface PayslipFieldProvenance {
+  source: PayslipDataSource;
+  confidence: "alta" | "media" | "bassa";
+  evidence?: string;
 }
 
 export interface Settings {
@@ -85,6 +114,8 @@ export interface Settings {
   weeklyOrdinaryHours: number;
   /** paga oraria base in €/h */
   basePay: number;
+  /** Retribuzione mensile di riferimento, distinta dalla paga oraria. */
+  monthlyReferencePay: number;
   // maggiorazioni: tutte configurabili dall'utente, default 0 — nessun valore universale
   overtimePct: number;
   holidayPct: number;
@@ -119,6 +150,7 @@ export const DEFAULT_SETTINGS: Settings = {
   dailyOrdinaryHours: 8,
   weeklyOrdinaryHours: 40,
   basePay: 0,
+  monthlyReferencePay: 0,
   overtimePct: 0,
   holidayPct: 0,
   nightPct: 0,
