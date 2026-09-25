@@ -15,6 +15,13 @@ let ready = false;
 let hydrating = false;
 let lastBulkSnapshot: DayEntry[] | null = null;
 let lastBulkDates: string[] = [];
+let payslipWrite: Promise<void> = Promise.resolve();
+function persistPayslips(): void {
+  const snapshot = [...payslips];
+  payslipWrite = payslipWrite.catch(() => undefined).then(() => repo.putPayslips(snapshot));
+  void payslipWrite.catch(() => undefined);
+}
+export function waitForPayslipWrites(): Promise<void> { return payslipWrite; }
 
 const listeners = new Set<() => void>();
 function emit(): void {
@@ -141,14 +148,26 @@ export function savePayslip(record: PayslipRecord): void {
   payslips = (payslips.some((item) => item.id === record.id)
     ? payslips.map((item) => item.id === record.id ? record : item)
     : [...payslips, record]).sort((a, b) => b.month.localeCompare(a.month));
-  void repo.putPayslips(payslips).catch(() => undefined);
+  persistPayslips();
   emit();
 }
 
 export function deletePayslip(id: string): void {
   payslips = payslips.filter((item) => item.id !== id);
-  void repo.putPayslips(payslips).catch(() => undefined);
+  persistPayslips();
   emit();
+}
+
+/** Cancella il rapporto precedente; lo storico personale resta salvo per impostazione predefinita. */
+export function resetJob(deleteHours = false): void {
+  payslips = [];
+  settings = { ...DEFAULT_SETTINGS, workerName: settings.workerName };
+  dayTemplates = [];
+  persistPayslips();
+  void repo.putSettings(settings).catch(() => undefined);
+  void repo.putDayTemplates([]).catch(() => undefined);
+  if (deleteHours) clearRegister();
+  else emit();
 }
 
 function applyDemo(): void {
@@ -236,7 +255,7 @@ export function importBackup(data: unknown): boolean {
     .catch(() => undefined);
   if (importedSettings) void repo.putSettings(settings).catch(() => undefined);
   void repo.putDayTemplates(dayTemplates).catch(() => undefined);
-  void repo.putPayslips(payslips).catch(() => undefined);
+  persistPayslips();
   void repo.putMeta("demo", false).catch(() => undefined);
   emit();
   return true;

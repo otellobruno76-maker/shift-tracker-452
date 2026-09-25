@@ -186,6 +186,11 @@ Non convertire una retribuzione mensile in paga oraria.
 Riconosci sinonimi e abbreviazioni italiane e controlla la coerenza matematica quando possibile.
 Non estrarre né restituire codice fiscale, IBAN, indirizzo, conto corrente o dati personali non richiesti.
 Per ogni voce utile conserva la descrizione originale in line_items e normalizzala nella categoria prevista.
+Conserva anche le voci fiscali e previdenziali esplicite (imponibili, contributi INPS,
+IRPEF lorda e trattenuta, detrazioni, addizionali e totali) come line_items con importo.
+Per i contributi inserisci rate_pct solo se l'aliquota è stampata; inserisci la base
+esplicita come quantità in euro solo quando la riga la identifica chiaramente.
+Non stimare aliquote, scaglioni, detrazioni o correttezza fiscale.
 Non sommare concetti semanticamente diversi e indica sempre unità, confidence ed evidence.
 Inserisci in overtime_tariffs soltanto tariffe unitarie espresse in €/h: l'importo totale
 della voce straordinario appartiene a line_items.amount e non è una tariffa oraria.

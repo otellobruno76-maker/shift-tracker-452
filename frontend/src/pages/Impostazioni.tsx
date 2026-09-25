@@ -17,7 +17,7 @@ import {
 import { fmtDateIt } from "@/lib/dates";
 import { exportBackupFile, importBackupFile } from "@/lib/export";
 import { nationalHolidays } from "@/lib/holidays";
-import { clearRegister, removeDemoData, saveSettings, useDemoActive, useSettings } from "@/lib/store";
+import { clearRegister, removeDemoData, resetJob, saveSettings, useDemoActive, useSettings } from "@/lib/store";
 import { MONTHS_IT } from "@/lib/types";
 import type { ReactNode } from "react";
 
@@ -29,6 +29,8 @@ export default function Impostazioni() {
   const thisYear = new Date().getFullYear();
   const [clearDialogOpen, setClearDialogOpen] = useState(false);
   const [clearStep, setClearStep] = useState<1 | 2>(1);
+  const [jobDialogOpen, setJobDialogOpen] = useState(false);
+  const [deleteHours, setDeleteHours] = useState(false);
 
   return (
     <div>
@@ -372,6 +374,9 @@ export default function Impostazioni() {
           <Trash2 className="mr-2 h-5 w-5" />
           Azzera registro
         </Button>
+        <Button variant="outline" className="h-14 w-full border-[#FECACA] text-base font-extrabold text-[#B91C1C]" data-testid="btn-change-job" onClick={() => { setDeleteHours(false); setJobDialogOpen(true); }}>
+          <Trash2 className="mr-2 h-5 w-5" />Azzera / cambia lavoro
+        </Button>
         <p className="text-xs text-[#64748B]">
           I tuoi dati restano solo su questo dispositivo: nessun account, nessun cloud. Per
           spostarli su un altro telefono usa Esporta/Importa backup.
@@ -386,6 +391,18 @@ export default function Impostazioni() {
             <Button variant="outline" onClick={() => setClearDialogOpen(false)}>Annulla</Button>
             {clearStep === 1 ? <Button variant="destructive" data-testid="btn-confirm-clear-register" onClick={() => setClearStep(2)}>Continua</Button> : <Button variant="destructive" data-testid="btn-confirm-clear-register-final" onClick={() => { clearRegister(); setClearDialogOpen(false); setClearStep(1); toast.success("Registro azzerato. Configurazioni mantenute."); }}>Azzera definitivamente</Button>}
           </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      <Dialog open={jobDialogOpen} onOpenChange={setJobDialogOpen}>
+        <DialogContent className="rounded-2xl" data-testid="change-job-dialog">
+          <DialogHeader><DialogTitle>Cambiare lavoro?</DialogTitle></DialogHeader>
+          <p className="text-sm">Saranno eliminati tutti i cedolini, le analisi e i confronti salvati, insieme alla configurazione dell’azienda, del contratto e delle giornate tipo.</p>
+          <fieldset className="space-y-2 text-sm"><legend className="font-bold">Storico ore personale</legend>
+            <label className="flex gap-2"><input type="radio" name="job-hours" checked={!deleteHours} onChange={() => setDeleteHours(false)} /> Mantieni storico ore (consigliato)</label>
+            <label className="flex gap-2"><input type="radio" name="job-hours" checked={deleteHours} onChange={() => setDeleteHours(true)} /> Elimina anche lo storico ore</label>
+          </fieldset>
+          <p className="text-xs text-[#64748B]">Conferma esplicitamente: l’operazione non può essere annullata.</p>
+          <DialogFooter className="gap-2"><Button variant="outline" onClick={() => setJobDialogOpen(false)}>Annulla</Button><Button variant="destructive" data-testid="btn-confirm-change-job" onClick={() => { resetJob(deleteHours); setJobDialogOpen(false); toast.success(deleteHours ? "Lavoro e storico ore eliminati." : "Lavoro azzerato. Storico ore mantenuto."); }}>Conferma cambio lavoro</Button></DialogFooter>
         </DialogContent>
       </Dialog>
     </div>

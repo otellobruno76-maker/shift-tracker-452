@@ -14,6 +14,7 @@ export interface ComparisonRow {
   sourceDescription?: string;
   registerLabel?: string;
   payslipLabel?: string;
+  missingReason?: string;
 }
 
 const round = (value: number) => Math.round(value * 100) / 100;
@@ -38,21 +39,64 @@ function compare(
   unit: ComparisonRow["unit"],
   tolerance: number,
   sourceDescription?: string,
+  missingReason?: string,
 ): ComparisonRow {
   if (registerValue === null || payslipValue === null) {
     return { key, label, registerValue, payslipValue, unit, difference: null, status: "insufficiente", sourceDescription,
-      explanation: payslipValue === null
-        ? "Dato non trovato nel cedolino con sufficiente affidabilità. Verifica questa voce."
-        : "Dati insufficienti nel registro per un confronto affidabile." };
+      explanation: `Non calcolabile automaticamente: ${missingReason ?? (payslipValue === null ? `nel cedolino manca la quantità esplicita di ${label.toLowerCase()}` : `nel registro manca il valore atteso di ${label.toLowerCase()}`)}.` };
   }
   const difference = round(registerValue - payslipValue);
   if (Math.abs(difference) <= tolerance) {
     return { key, label, registerValue, payslipValue, unit, difference, status: "coerente", sourceDescription,
       explanation: "I valori risultano coerenti considerando i normali arrotondamenti." };
   }
-  const direction = difference > 0 ? "in più" : "in meno";
   return { key, label, registerValue, payslipValue, unit, difference, status: "differenza", sourceDescription,
-    explanation: `Nel registro risultano ${Math.abs(difference).toLocaleString("it-IT")} ${unit} ${direction}. Il valore potrebbe essere contabilizzato con una voce diversa o in un periodo successivo.` };
+    explanation: `Scostamento di ${Math.abs(difference).toLocaleString("it-IT")} ${unit} oltre la tolleranza di ${tolerance.toLocaleString("it-IT")} ${unit}; controlla la voce e il periodo indicato.` };
+}
+
+function explicitAmount(record: PayslipRecord, pattern: RegExp): number | null {
+  const items = (record.items ?? []).filter((item) => item.confidence !== "bassa" && pattern.test(item.originalDescription) && item.amount !== null);
+  if (items.length) return round(items.reduce((sum, item) => sum + (item.amount ?? 0), 0));
+  const totals = record.totals.filter((item) => pattern.test(item.label));
+  return totals.length ? round(totals.reduce((sum, item) => sum + item.value, 0)) : null;
+}
+
+function fiscalRows(record: PayslipRecord): ComparisonRow[] {
+  const items = (record.items ?? []).filter((item) => item.confidence !== "bassa");
+  const rows: ComparisonRow[] = [];
+  const previdentialBase = explicitAmount(record, /imponibile\s+(previdenziale|inps|contributivo)/i);
+  const fiscalBase = explicitAmount(record, /imponibile\s+(fiscale|irpef)/i);
+  const contributions = items.filter((item) => /contribut[oi]|\binps\b/i.test(item.originalDescription) && !/imponibile/i.test(item.originalDescription) && item.amount !== null);
+  const contributionValue = contributions.length ? round(contributions.reduce((sum, item) => sum + (item.amount ?? 0), 0)) : explicitAmount(record, /(?:contribut[oi]|\binps\b)(?!.*imponibile)/i);
+  if (previdentialBase !== null) rows.push(compare("previdentialBase", "Imponibile previdenziale", null, previdentialBase, "€", 0.05, undefined, "manca il dettaglio completo delle voci soggette a contributi"));
+  if (fiscalBase !== null) rows.push(compare("fiscalBase", "Imponibile fiscale", null, fiscalBase, "€", 0.05, undefined, "manca il dettaglio completo delle voci fiscalmente imponibili"));
+  const rated = contributions.filter((item) => item.ratePct !== null);
+  const contributionBase = previdentialBase ?? (rated.length === 1 && rated[0].unit === "euro" ? rated[0].quantity : null);
+  if (contributionBase !== null || contributionValue !== null) {
+    rows.push(compare("contributions", "Contributi previdenziali", null, contributionValue, "€", 0.05, undefined,
+      contributionBase === null ? "manca l’imponibile previdenziale esplicito" : "manca l’aliquota contributiva esplicita"));
+    if (contributionBase !== null && rated.length === 1 && contributions.length === 1 && rated[0].ratePct !== null) {
+      rows[rows.length - 1] = compare("contributions", "Contributi previdenziali", round(contributionBase * rated[0].ratePct / 100), contributionValue, "€", 0.05, rated[0].originalDescription);
+    }
+  }
+  const grossTax = explicitAmount(record, /irpef\s+lorda|imposta\s+lorda/i);
+  const deductions = explicitAmount(record, /detrazion/i);
+  const withheldTax = explicitAmount(record, /irpef\s+(trattenuta|netta)|imposta\s+netta/i);
+  if (grossTax !== null) rows.push(compare("grossTax", "IRPEF lorda", null, grossTax, "€", 0.05, undefined, "mancano base fiscale e parametri espliciti per ricostruire l’imposta lorda"));
+  if (deductions !== null) rows.push(compare("taxDeductions", "Detrazioni", null, deductions, "€", 0.05, undefined, "mancano le regole e i dati individuali per ricostruire le detrazioni"));
+  if (withheldTax !== null) rows.push(compare("withheldTax", "IRPEF trattenuta", grossTax !== null && deductions !== null ? round(grossTax - deductions) : null, withheldTax, "€", 0.05, undefined,
+    grossTax === null ? "manca l’IRPEF lorda esplicita" : "mancano le detrazioni applicate esplicite"));
+  for (const [key, pattern, label] of [["regionalTax", /addizionale\s+regionale/i, "Addizionale regionale"], ["municipalTax", /addizionale\s+comunale/i, "Addizionale comunale"]] as const) {
+    const amount = explicitAmount(record, pattern);
+    if (amount !== null) rows.push(compare(key, label, null, amount, "€", 0.05, undefined,
+      fiscalBase === null ? "manca l’imponibile fiscale esplicito" : "mancano aliquota, acconti e rate applicate espliciti"));
+  }
+  const gross = record.grossTotal ?? explicitAmount(record, /totale\s+competenze|lordo/i);
+  const withheld = explicitAmount(record, /totale\s+(ritenute|trattenute)/i);
+  const net = record.netTotal ?? explicitAmount(record, /netto\s+(?:a\s+)?pagare/i);
+  if (net !== null) rows.push(compare("netArithmetic", "Netto matematico", gross !== null && withheld !== null ? round(gross - withheld) : null, net, "€", 0.05, undefined,
+    gross === null ? "manca il totale competenze esplicito" : "manca il totale trattenute esplicito"));
+  return rows;
 }
 
 function quantity(record: PayslipRecord, category: PayslipItem["category"], preferred: "hours" | "days", dailyHours: number): number | null {
@@ -116,7 +160,7 @@ export function compareMonthWithPayslip(totals: Totals, record: PayslipRecord, s
   if (appNet !== null || payslipNet !== null) {
     rows.push({ ...compare("net", "Netto", appNet, payslipNet, "€", 0.05, descriptions(items, "net")), registerLabel: "Stima dell’app", payslipLabel: "Importo letto nel cedolino" });
   }
-  return rows.filter((row) => row.registerValue !== null && row.registerValue !== 0 || row.payslipValue !== null);
+  return [...rows, ...fiscalRows(record)].filter((row) => row.registerValue !== null && row.registerValue !== 0 || row.payslipValue !== null);
 }
 
 export function periodMatches(selectedMonth: string, record: PayslipRecord): boolean {

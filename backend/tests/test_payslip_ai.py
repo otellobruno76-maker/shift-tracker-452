@@ -114,6 +114,11 @@ def test_prompt_distingue_tariffa_oraria_da_importo_totale():
     assert "line_items.amount" in payslip_ai.SYSTEM_PROMPT
 
 
+def test_prompt_conserva_componenti_fiscali_senza_inferire_aliquote():
+    assert "IRPEF lorda e trattenuta" in payslip_ai.SYSTEM_PROMPT
+    assert "Non stimare aliquote" in payslip_ai.SYSTEM_PROMPT
+
+
 def test_normalizzazione_riusa_percentuale_e_ore_della_voce_strutturata():
     value = payslip_ai.PayslipAIResult(pay_type="unknown", line_items=[{
         "original_description": "Straord. 15%", "category": "overtime", "quantity": 8,

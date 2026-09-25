@@ -6,7 +6,8 @@ import MonthPrefillDialog from "@/components/MonthPrefillDialog";
 import MonthNav from "@/components/MonthNav";
 import { Button } from "@/components/ui/button";
 import { inclusiveDateRange } from "@/lib/bulkDays";
-import { currentMonthKey, isoDayList, parseMonthKey, todayISO, weekdayIndex } from "@/lib/dates";
+import { isoDayList, parseMonthKey, todayISO, weekdayIndex } from "@/lib/dates";
+import { useActiveMonth } from "@/lib/activeMonth";
 import { fmtHours } from "@/lib/hours";
 import { holidayName } from "@/lib/holidays";
 import { computeSplits } from "@/lib/stats";
@@ -37,7 +38,7 @@ export default function Calendario() {
   const days = useDays();
   const settings = useSettings();
   const canUndoBulk = useCanUndoBulk();
-  const [selectedMonth, setSelectedMonth] = useState(currentMonthKey());
+  const [selectedMonth, setSelectedMonth] = useActiveMonth();
   const [openDate, setOpenDate] = useState<string | null>(null);
   const [selectMode, setSelectMode] = useState(false);
   const [rangeStart, setRangeStart] = useState<string | null>(null);

@@ -63,4 +63,35 @@ describe("confronto deterministico registro e cedolino", () => {
     expect(compareMonthWithPayslip({ ...totals(), permessiDays: 1 }, record({ items }), { ...DEFAULT_SETTINGS, dailyOrdinaryHours: 0 }).find((row) => row.key === "permission")?.status).toBe("insufficiente");
   });
   it("rileva un cedolino di mese differente", () => expect(periodMatches("2026-09", record({ month: "2026-08" }))).toBe(false));
+  it("segnala quattro ore di straordinario con i due valori", () => {
+    expect(compareMonthWithPayslip(totals(160, 14), record(), DEFAULT_SETTINGS).find((row) => row.key === "overtime"))
+      .toMatchObject({ registerValue: 14, payslipValue: 10, difference: 4, status: "differenza" });
+  });
+  it("mostra lo scostamento di ferie indipendentemente dalle altre voci", () => {
+    const items: PayslipItem[] = [{ originalDescription: "Ferie godute", category: "vacation", quantity: 1, unit: "days", ratePct: null, amount: null, confidence: "alta", source: "ai" }];
+    const rows = compareMonthWithPayslip({ ...totals(), ferieDays: 2 }, record({ items }), DEFAULT_SETTINGS);
+    expect(rows.find((row) => row.key === "vacation")).toMatchObject({ registerValue: 2, payslipValue: 1, difference: 1, status: "differenza" });
+    expect(rows.find((row) => row.key === "ordinary")?.status).toBe("coerente");
+  });
+  it("calcola contributi soltanto con base e aliquota esplicite", () => {
+    const items: PayslipItem[] = [
+      { originalDescription: "Imponibile previdenziale", category: "other", quantity: null, unit: "euro", ratePct: null, amount: 2000, confidence: "alta", source: "ai" },
+      { originalDescription: "Contributo INPS", category: "deductions", quantity: null, unit: "euro", ratePct: 9.19, amount: 183.8, confidence: "alta", source: "ai" },
+    ];
+    const result = compareMonthWithPayslip(totals(), record({ items }), DEFAULT_SETTINGS);
+    expect(result.find((row) => row.key === "contributions")).toMatchObject({ registerValue: 183.8, payslipValue: 183.8, status: "coerente" });
+    items[1] = { ...items[1], ratePct: null };
+    const missing = compareMonthWithPayslip(totals(), record({ items }), DEFAULT_SETTINGS);
+    expect(missing.find((row) => row.key === "contributions")?.status).toBe("insufficiente");
+    expect(missing.find((row) => row.key === "contributions")?.explanation).toContain("aliquota contributiva");
+    expect(missing.find((row) => row.key === "ordinary")?.status).toBe("coerente");
+  });
+  it("ricostruisce IRPEF netta e netto matematico dalle componenti esplicite", () => {
+    const items: PayslipItem[] = [
+      ["IRPEF lorda", 600], ["Detrazioni lavoro", 100], ["IRPEF trattenuta", 500], ["Totale trattenute", 700],
+    ].map(([originalDescription, amount]) => ({ originalDescription: String(originalDescription), amount: Number(amount), category: "other", quantity: null, unit: "euro", ratePct: null, confidence: "alta", source: "ai" }));
+    const rows = compareMonthWithPayslip(totals(), record({ items, grossTotal: 2200, netTotal: 1500 }), DEFAULT_SETTINGS);
+    expect(rows.find((row) => row.key === "withheldTax")?.status).toBe("coerente");
+    expect(rows.find((row) => row.key === "netArithmetic")?.status).toBe("coerente");
+  });
 });

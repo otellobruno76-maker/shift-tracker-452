@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { clearRegister, deletePayslip, exportBackupPayload, importBackup, saveDayTemplate, saveEntry, savePayslip, saveSettings } from "./store";
+import { clearRegister, deletePayslip, exportBackupPayload, importBackup, resetJob, saveDayTemplate, saveEntry, savePayslip, saveSettings } from "./store";
 import type { DayTemplate, PayslipRecord } from "./types";
 
 const template: DayTemplate = {
@@ -69,5 +69,33 @@ describe("backup integrato", () => {
     expect(backup.settings).toMatchObject({ basePay: 12.5, ccnl: "CCNL fittizio", contractLevel: "Livello X" });
     expect(backup.dayTemplates).toEqual([template]);
     expect(backup.payslips).toEqual([payslip]);
+  });
+});
+
+describe("eliminazione cedolini e cambio lavoro", () => {
+  const snapshot = () => JSON.parse(exportBackupPayload());
+  const seed = () => {
+    importBackup({ days: [], settings: null });
+    savePayslip({ ...payslip, id: "A", month: "2026-07" });
+    savePayslip({ ...payslip, id: "B", month: "2026-08", items: [{ originalDescription: "Straordinario", category: "overtime", quantity: 4, unit: "hours", ratePct: 15, amount: 50, confidence: "alta", source: "ai" }] });
+    savePayslip({ ...payslip, id: "C", month: "2026-09" });
+    saveEntry({ id: "ora-storica", date: "2026-08-05", dayType: "ferie", start: "", end: "", breakMinutes: 0, notturno: false, reperibilita: false, trasferta: false, festivo: null, note: "", createdAt: "x", updatedAt: "x" });
+    saveSettings({ company: "Azienda sintetica", ccnl: "Contratto sintetico" });
+  };
+  it("elimina solo B e accetta lo stesso identico cedolino come nuovo", () => {
+    seed(); deletePayslip("B");
+    expect(snapshot().payslips.map((item: PayslipRecord) => item.id)).toEqual(["C", "A"]);
+    savePayslip({ ...payslip, id: "B-nuovo", month: "2026-08" });
+    expect(snapshot().payslips).toHaveLength(3);
+  });
+  it("mantiene per default lo storico ore e cancella configurazione e cedolini", () => {
+    seed(); resetJob();
+    expect(snapshot()).toMatchObject({ payslips: [], dayTemplates: [], settings: { company: "", ccnl: "" } });
+    expect(snapshot().days).toHaveLength(1);
+  });
+  it("cancella anche le ore solo se richiesto esplicitamente", () => {
+    seed(); resetJob(true);
+    expect(snapshot().days).toEqual([]);
+    expect(snapshot().payslips).toEqual([]);
   });
 });

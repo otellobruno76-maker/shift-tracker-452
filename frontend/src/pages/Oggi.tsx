@@ -1,11 +1,12 @@
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { CalendarClock, Copy, Plus } from "lucide-react";
 import DemoBanner from "@/components/DemoBanner";
 import MonthNav from "@/components/MonthNav";
 import { Badge } from "@/components/ui/badge";
 import { buttonVariants } from "@/components/ui/button";
-import { currentMonthKey, fmtDateIt, parseMonthKey, todayISO } from "@/lib/dates";
+import { fmtDateIt, parseMonthKey, todayISO } from "@/lib/dates";
+import { useActiveMonth } from "@/lib/activeMonth";
 import { fmtEUR, fmtHours } from "@/lib/hours";
 import { entryNetMinutes, monthlyReferenceEstimate, statsForMonth } from "@/lib/stats";
 import { useDays, useSettings } from "@/lib/store";
@@ -15,7 +16,7 @@ import type { DayEntry } from "@/lib/types";
 export default function Oggi() {
   const days = useDays();
   const settings = useSettings();
-  const [selectedMonth, setSelectedMonth] = useState(currentMonthKey());
+  const [selectedMonth, setSelectedMonth] = useActiveMonth();
   const { year, month } = parseMonthKey(selectedMonth);
   const totals = useMemo(
     () => statsForMonth(days, settings, year, month),

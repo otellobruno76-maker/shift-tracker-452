@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
 import { Archive, FileSpreadsheet, FileText } from "lucide-react";
 import { toast } from "sonner";
 import MonthNav from "@/components/MonthNav";
@@ -13,7 +13,8 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { currentMonthKey, monthLabel, parseMonthKey } from "@/lib/dates";
+import { monthLabel, parseMonthKey } from "@/lib/dates";
+import { useActiveMonth } from "@/lib/activeMonth";
 import { exportBackupFile, exportMonthCSV, exportMonthPDF } from "@/lib/export";
 import { fmtEUR, fmtHours } from "@/lib/hours";
 import { monthlyReferenceEstimate, statsForMonth, statsForYear } from "@/lib/stats";
@@ -29,7 +30,7 @@ export default function Riepilogo() {
   const days = useDays();
   const settings = useSettings();
   const payslips = usePayslips();
-  const [selectedMonth, setSelectedMonth] = useState(currentMonthKey());
+  const [selectedMonth, setSelectedMonth] = useActiveMonth();
   const { year, month } = parseMonthKey(selectedMonth);
   const totals = useMemo(
     () => statsForMonth(days, settings, year, month),
@@ -172,7 +173,7 @@ export default function Riepilogo() {
             <h2 className="font-heading text-lg font-extrabold text-[#0F172A]">Confronto mese e cedolino</h2>
             {!payslip ? <p className="mt-2 text-sm text-[#64748B]">Nessun cedolino salvato per questo mese.</p> : (
               <div className="mt-3 space-y-3">
-                {comparison.length === 0 && <p className="text-sm text-[#64748B]">Dati insufficienti per un confronto affidabile. Controlla o completa i dati del cedolino.</p>}
+                {comparison.length === 0 && <p className="text-sm text-[#64748B]">Non calcolabile con i dati disponibili: il cedolino non contiene voci leggibili per il confronto.</p>}
                 {comparison.map((row) => <ComparisonItem key={row.key} row={row} />)}
                 <p className="text-xs text-[#64748B]">Il confronto segnala possibili differenze da verificare: non stabilisce che il cedolino sia errato.</p>
               </div>
@@ -300,12 +301,13 @@ function ComparisonItem({ row }: { row: ComparisonRow }) {
   const appearance = row.status === "coerente"
     ? { icon: "✓", title: "Coerente", className: "border-[#BBF7D0] bg-[#F0FDF4] text-[#166534]" }
     : row.status === "differenza"
-      ? { icon: "⚠", title: "Possibile differenza", className: "border-[#FDE68A] bg-[#FFFBEB] text-[#92400E]" }
-      : { icon: "?", title: "Dato insufficiente / da verificare", className: "border-[#CBD5E1] bg-[#F8FAFC] text-[#475569]" };
+      ? { icon: "⚠", title: "Possibile differenza da verificare", className: "border-[#FDE68A] bg-[#FFFBEB] text-[#92400E]" }
+      : { icon: "?", title: "Non calcolabile con i dati disponibili", className: "border-[#CBD5E1] bg-[#F8FAFC] text-[#475569]" };
   const value = (number: number | null) => number === null ? "dato non individuato" : `${number.toLocaleString("it-IT")} ${row.unit}`;
   return <article className={`rounded-xl border p-3 ${appearance.className}`} data-testid={`comparison-${row.key}`}>
     <h3 className="font-extrabold uppercase tracking-wide">{row.label}</h3>
-    <div className="mt-2 grid gap-1 text-sm text-[#334155]"><p>{row.registerLabel ?? "Registrati nell’app"}: <b>{value(row.registerValue)}</b></p><p>{row.payslipLabel ?? "Rilevati nel cedolino"}: <b>{value(row.payslipValue)}</b></p>{row.difference !== null && <p>Differenza: <b>{value(Math.abs(row.difference))}</b></p>}</div>
+    <div className="mt-2 grid gap-1 text-sm text-[#334155]"><p>{row.registerLabel ?? "Valore registro / atteso"}: <b>{value(row.registerValue)}</b></p><p>{row.payslipLabel ?? "Dato letto dal cedolino"}: <b>{value(row.payslipValue)}</b></p>{row.difference !== null && <p>Differenza (registro − cedolino): <b>{value(row.difference)}</b></p>}</div>
+    <p className="mt-2 text-xs font-semibold uppercase">Risultato del controllo</p>
     <p className="mt-2 font-bold">{appearance.icon} {appearance.title}</p>
     <p className="mt-1 text-sm leading-relaxed">{row.explanation}</p>
     {row.sourceDescription && <p className="mt-1 text-xs">Voce originale: {row.sourceDescription}</p>}

@@ -22,6 +22,7 @@ import { mergePayslipAnalyses, requestPayslipAI } from "@/lib/payslipAi";
 import { initialReview, updateReviewValue, type ReviewState } from "@/lib/payslipReview";
 import { savePayslip, saveSettings, usePayslips, useSettings } from "@/lib/store";
 import { uid, type PayslipRecord } from "@/lib/types";
+import { getActiveMonth } from "@/lib/activeMonth";
 
 
 const confidenceStyle: Record<Confidence, string> = {
@@ -88,12 +89,12 @@ export default function ConfiguraCedolino() {
       const detected = analyzeStructuredPayslip(document);
       if (!mounted.current || attempt !== run.current) return;
       setAnalysis(detected);
-      setReview(initialReview(detected, replaced?.month ?? new Date().toISOString().slice(0, 7), settings.dailyOrdinaryHours));
+      setReview(initialReview(detected, replaced?.month ?? getActiveMonth(), settings.dailyOrdinaryHours));
     } catch (cause) {
       if (!mounted.current || attempt !== run.current) return;
       const detected = emptyPayslipAnalysis();
       setAnalysis(detected);
-      setReview(initialReview(detected, replaced?.month ?? new Date().toISOString().slice(0, 7), settings.dailyOrdinaryHours));
+      setReview(initialReview(detected, replaced?.month ?? getActiveMonth(), settings.dailyOrdinaryHours));
       setError(cause instanceof Error ? cause.message : "Lettura locale non riuscita. Usa l’AI con il tuo consenso o completa i campi mancanti.");
     } finally {
       if (mounted.current && attempt === run.current) { setTiming((previous) => ({ ...previous, localMs: performance.now() - prepared })); setBusy(false); }

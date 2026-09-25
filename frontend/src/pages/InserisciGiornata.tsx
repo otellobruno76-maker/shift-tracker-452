@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import {
   BedDouble,
@@ -27,6 +27,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { fmtDateIt, toISODate, todayISO } from "@/lib/dates";
+import { getActiveMonth, setActiveMonth } from "@/lib/activeMonth";
 import { computeShift, fmtHours, nightWindowMinutes } from "@/lib/hours";
 import { holidayName } from "@/lib/holidays";
 import {
@@ -89,7 +90,8 @@ function FormBody({
   const source = (editId ? days.find((d) => d.id === editId) : undefined) ??
     (copiaId ? days.find((d) => d.id === copiaId) : undefined);
 
-  const [date, setDate] = useState(source?.date ?? prefillDate ?? todayISO());
+  const [date, setDate] = useState(source?.date ?? prefillDate ?? `${getActiveMonth()}-01`);
+  useEffect(() => { if (date) setActiveMonth(date.slice(0, 7)); }, [date]);
   const [dayType, setDayType] = useState<DayType>(source?.dayType ?? "lavoro");
   const [start, setStart] = useState(source?.start ?? "");
   const [end, setEnd] = useState(source?.end ?? "");
@@ -254,6 +256,7 @@ function FormBody({
       updatedAt: now,
     };
     saveEntry(entry);
+    setActiveMonth(date.slice(0, 7));
     toast.success(editId ? "Giornata aggiornata." : "Giornata salvata.");
     original.current = snapshot;
     navigate(`/inserisci?id=${encodeURIComponent(entry.id)}`, { replace: true });
