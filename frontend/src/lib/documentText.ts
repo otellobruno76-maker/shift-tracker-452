@@ -1,6 +1,7 @@
 import { getDocument, GlobalWorkerOptions } from "pdfjs-dist";
 import pdfWorkerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import { createWorker, OEM } from "tesseract.js";
+import { bounded, prepareDocument } from "./documentPreparation";
 import { buildStructuredDocument, type DocumentToken, type StructuredDocument } from "./documentModel";
 
 GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
@@ -10,7 +11,7 @@ export interface ExtractionProgress {
   progress: number;
 }
 
-const MAX_FILE_BYTES = 15 * 1024 * 1024;
+
 
 export interface PositionedPdfText {
   str: string;
@@ -67,88 +68,38 @@ function ocrTokens(data: unknown, page: number): DocumentToken[] {
   }));
 }
 
-function assertFile(file: File): void {
-  const supported = file.type === "application/pdf" || file.type.startsWith("image/");
-  if (!supported) throw new Error("Formato non supportato. Usa un PDF oppure un'immagine.");
-  if (file.size > MAX_FILE_BYTES) throw new Error("Il documento supera il limite di 15 MB.");
-}
-
-async function createLocalOcr(onProgress: (state: ExtractionProgress) => void) {
-  return createWorker("ita", OEM.LSTM_ONLY, {
-    workerPath: "/ocr/worker.min.js",
-    corePath: "/ocr/tesseract-core-simd-lstm.wasm.js",
-    langPath: "/ocr",
-    workerBlobURL: false,
-    logger: (message) => {
-      if (typeof message.progress === "number") {
-        onProgress({ label: "Lettura locale dell'immagine…", progress: message.progress });
-      }
-    },
-  });
-}
-
-async function extractImage(file: File, onProgress: (state: ExtractionProgress) => void): Promise<string> {
-  onProgress({ label: "Avvio lettura locale…", progress: 0.05 });
-  const worker = await createLocalOcr(onProgress);
-  try {
-    const result = await worker.recognize(file, {}, { text: true, blocks: true });
-    return result.data.text.trim();
-  } finally {
-    await worker.terminate();
-  }
+async function withLocalOcr<T>(onProgress: (state: ExtractionProgress) => void, run: (worker: Awaited<ReturnType<typeof createWorker>>) => Promise<T>): Promise<T> {
+  let worker: Awaited<ReturnType<typeof createWorker>> | undefined;
+  let expired = false;
+  let fail: (error: Error) => void = () => undefined;
+  const failure = new Promise<never>((_, reject) => { fail = reject; });
+  const work = (async () => {
+    worker = await createWorker("ita", OEM.LSTM_ONLY, {
+      workerPath: "/ocr/worker.min.js", corePath: "/ocr", langPath: "/ocr", workerBlobURL: false,
+      errorHandler: () => fail(new Error("Lettura locale della foto non disponibile. Puoi usare l’AI con il tuo consenso oppure compilare i campi.")),
+      logger: (message) => { if (!expired && typeof message.progress === "number") onProgress({ label: "Lettura locale dell’immagine…", progress: message.progress }); },
+    });
+    if (expired) { await worker.terminate(); throw new Error("Lettura locale interrotta"); }
+    return run(worker);
+  })();
+  try { return await bounded(Promise.race([work, failure]), 30_000, "La lettura locale richiede troppo tempo. Puoi usare l’AI con il tuo consenso o compilare i dati.", () => { expired = true; void worker?.terminate(); }); }
+  finally { expired = true; if (worker) await worker.terminate(); }
 }
 
 async function extractImageStructure(file: File, onProgress: (state: ExtractionProgress) => void): Promise<StructuredDocument> {
   onProgress({ label: "Avvio lettura locale…", progress: 0.05 });
-  const worker = await createLocalOcr(onProgress);
-  try {
-    const result = await worker.recognize(file, {}, { text: true, blocks: true });
+  return withLocalOcr(onProgress, async (worker) => {
+    const result = await worker.recognize(file, { rotateAuto: true }, { text: true, blocks: true });
     const tokens = ocrTokens(result.data, 1);
     return tokens.length ? buildStructuredDocument(tokens) : buildStructuredDocument([{ text: result.data.text, page: 1, x: 0, y: 0, width: 1, height: 10, source: "ocr" }]);
-  } finally { await worker.terminate(); }
-}
-
-async function extractPdf(file: File, onProgress: (state: ExtractionProgress) => void): Promise<string> {
-  onProgress({ label: "Lettura del PDF…", progress: 0.05 });
-  const pdf = await getDocument({ data: await file.arrayBuffer() }).promise;
-  const pageTexts: string[] = [];
-  const pagesToRead = Math.min(pdf.numPages, 12);
-  for (let pageNumber = 1; pageNumber <= pagesToRead; pageNumber++) {
-    const page = await pdf.getPage(pageNumber);
-    const content = await page.getTextContent();
-    const text = reconstructPdfText(content.items.filter((item): item is typeof item & { str: string } => "str" in item));
-    pageTexts.push(text);
-    onProgress({ label: `Lettura pagina ${pageNumber} di ${pagesToRead}…`, progress: pageNumber / pagesToRead });
-  }
-  const embeddedText = pageTexts.join("\n").trim();
-  if (embeddedText.length >= 40) return embeddedText;
-
-  const worker = await createLocalOcr(onProgress);
-  try {
-    const scannedPages: string[] = [];
-    const pagesToScan = Math.min(pdf.numPages, 3);
-    for (let pageNumber = 1; pageNumber <= pagesToScan; pageNumber++) {
-      const page = await pdf.getPage(pageNumber);
-      const viewport = page.getViewport({ scale: 1.7 });
-      const canvas = document.createElement("canvas");
-      canvas.width = Math.ceil(viewport.width);
-      canvas.height = Math.ceil(viewport.height);
-      const context = canvas.getContext("2d");
-      if (!context) throw new Error("Impossibile preparare la pagina per la lettura.");
-      await page.render({ canvas, canvasContext: context, viewport }).promise;
-      const result = await worker.recognize(canvas);
-      scannedPages.push(result.data.text);
-      onProgress({ label: `Analisi immagine pagina ${pageNumber} di ${pagesToScan}…`, progress: pageNumber / pagesToScan });
-    }
-    return scannedPages.join("\n").trim();
-  } finally {
-    await worker.terminate();
-  }
+  });
 }
 
 async function extractPdfStructure(file: File, onProgress: (state: ExtractionProgress) => void): Promise<StructuredDocument> {
   onProgress({ label: "Lettura della struttura del PDF…", progress: 0.05 });
-  const pdf = await getDocument({ data: await file.arrayBuffer() }).promise;
+  const task = getDocument({ data: await file.arrayBuffer() });
+  try {
+  const pdf = await task.promise;
   const tokens: DocumentToken[] = [];
   const pagesToRead = Math.min(pdf.numPages, 12);
   for (let pageNumber = 1; pageNumber <= pagesToRead; pageNumber++) {
@@ -158,36 +109,26 @@ async function extractPdfStructure(file: File, onProgress: (state: ExtractionPro
     onProgress({ label: `Lettura pagina ${pageNumber} di ${pagesToRead}…`, progress: pageNumber / pagesToRead });
   }
   if (tokens.map((token) => token.text).join("").replace(/\s/g, "").length >= 20) return buildStructuredDocument(tokens);
-  const worker = await createLocalOcr(onProgress);
-  try {
+  return await withLocalOcr(onProgress, async (worker) => {
     for (let pageNumber = 1; pageNumber <= Math.min(pdf.numPages, 3); pageNumber++) {
       const page = await pdf.getPage(pageNumber); const viewport = page.getViewport({ scale: 1.7 });
       const canvas = document.createElement("canvas"); canvas.width = Math.ceil(viewport.width); canvas.height = Math.ceil(viewport.height);
       const context = canvas.getContext("2d"); if (!context) throw new Error("Impossibile preparare la pagina.");
       await page.render({ canvas, canvasContext: context, viewport }).promise;
-      const result = await worker.recognize(canvas, {}, { text: true, blocks: true }); tokens.push(...ocrTokens(result.data, pageNumber));
+      const result = await worker.recognize(canvas, { rotateAuto: true }, { text: true, blocks: true }); tokens.push(...ocrTokens(result.data, pageNumber));
     }
     return buildStructuredDocument(tokens);
-  } finally { await worker.terminate(); }
+  });
+  } finally { await task.destroy(); }
 }
 
-export async function extractDocumentText(
-  file: File,
-  onProgress: (state: ExtractionProgress) => void,
-): Promise<string> {
-  assertFile(file);
-  const text = file.type === "application/pdf"
-    ? await extractPdf(file, onProgress)
-    : await extractImage(file, onProgress);
-  if (text.replace(/\s/g, "").length < 20) {
-    throw new Error("Documento non leggibile: prova una foto più nitida o un PDF con testo selezionabile.");
-  }
-  return text;
+export async function extractDocumentText(file: File, onProgress: (state: ExtractionProgress) => void): Promise<string> {
+  return (await extractDocumentStructure(file, onProgress)).text;
 }
 
-export async function extractDocumentStructure(file: File, onProgress: (state: ExtractionProgress) => void): Promise<StructuredDocument> {
-  assertFile(file);
-  const result = file.type === "application/pdf" ? await extractPdfStructure(file, onProgress) : await extractImageStructure(file, onProgress);
-  if (result.text.replace(/\s/g, "").length < 20) throw new Error("Documento non leggibile");
+export async function extractDocumentStructure(file: File, onProgress: (state: ExtractionProgress) => void, prepared = false): Promise<StructuredDocument> {
+  const input = prepared ? file : await prepareDocument(file);
+  const result = input.type === "application/pdf" ? await extractPdfStructure(input, onProgress) : await extractImageStructure(input, onProgress);
+  if (result.text.replace(/\s/g, "").length < 20) throw new Error("Testo poco leggibile: verifica luce e inquadratura. Puoi usare l’AI con il tuo consenso o compilare i campi mancanti.");
   return result;
 }

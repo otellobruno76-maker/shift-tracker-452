@@ -46,4 +46,5 @@ app.add_middleware(
     allow_origins=_cors_origins(),
     allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["Content-Type"],
+    expose_headers=["Server-Timing"],
 )

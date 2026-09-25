@@ -2,19 +2,19 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 import logging
 import os
 import re
-import tempfile
 import time
 from collections import Counter
-from pathlib import Path
+from contextvars import ContextVar
 from typing import Literal
 
 import httpx
-from fastapi import APIRouter, File, HTTPException, UploadFile
+from fastapi import APIRouter, File, HTTPException, UploadFile, Response
 from pydantic import BaseModel, Field
 
 router = APIRouter()
@@ -22,6 +22,13 @@ MAX_PAYSLIP_BYTES = 15 * 1024 * 1024
 ALLOWED_MIME = {"application/pdf", "image/jpeg", "image/png", "image/webp"}
 logger = logging.getLogger(__name__)
 _metrics = Counter()
+_request_timings: ContextVar[dict[str, float] | None] = ContextVar("payslip_timings", default=None)
+AI_DEADLINE_SECONDS = 55
+
+def _timed(name: str, started: float) -> None:
+    timings = _request_timings.get()
+    if timings is not None:
+        timings[name] = (time.monotonic() - started) * 1000
 
 
 class PayslipAIError(RuntimeError):
@@ -182,6 +189,8 @@ Per ogni voce utile conserva la descrizione originale in line_items e normalizza
 Non sommare concetti semanticamente diversi e indica sempre unità, confidence ed evidence.
 Inserisci in overtime_tariffs soltanto tariffe unitarie espresse in €/h: l'importo totale
 della voce straordinario appartiene a line_items.amount e non è una tariffa oraria.
+Mantieni evidence brevi (una etichetta e il valore), senza ripetere intere righe.
+Ometti da fields i campi null; non omettere nessuna voce retributiva utile da line_items.
 Restituisci esclusivamente lo schema JSON richiesto."""
 
 
@@ -243,8 +252,9 @@ async def analyze_document_with_ai(data: bytes, mime: str, filename: str) -> Pay
     if not api_key:
         raise PayslipAIError("AI_NOT_CONFIGURED")
     model = os.getenv("OPENAI_PAYSLIP_MODEL", "gpt-4.1-mini")
+    preparation_started = time.monotonic()
     encoded = base64.b64encode(data).decode("ascii")
-    document = ({"type": "input_file", "filename": filename, "file_data": f"data:{mime};base64,{encoded}"}
+    document = ({"type": "input_file", "filename": "documento.pdf", "file_data": f"data:{mime};base64,{encoded}"}
                 if mime == "application/pdf" else
                 {"type": "input_image", "image_url": f"data:{mime};base64,{encoded}", "detail": "high"})
     payload = {
@@ -252,14 +262,17 @@ async def analyze_document_with_ai(data: bytes, mime: str, filename: str) -> Pay
         "input": [{"role": "user", "content": [{"type": "input_text", "text": SYSTEM_PROMPT}, document]}],
         "text": {"format": {"type": "json_schema", "name": "italian_payslip", "strict": True, "schema": _schema()}},
     }
+    _timed("preprocess", preparation_started)
+    openai_started = time.monotonic()
     try:
-        async with httpx.AsyncClient(timeout=90) as client:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(50, connect=10)) as client:
             response = await client.post("https://api.openai.com/v1/responses", headers={"Authorization": f"Bearer {api_key}"}, json=payload)
     except httpx.TimeoutException as exc:
         raise PayslipAIError("OPENAI_TIMEOUT") from exc
     except httpx.RequestError as exc:
         raise PayslipAIError("OPENAI_BAD_REQUEST") from exc
 
+    _timed("openai", openai_started)
     if response.is_error:
         try:
             error = response.json().get("error", {})
@@ -277,6 +290,7 @@ async def analyze_document_with_ai(data: bytes, mime: str, filename: str) -> Pay
             code = _safe_bad_request_code(error)
         raise PayslipAIError(code)
 
+    parsing_started = time.monotonic()
     try:
         body = response.json()
         usage = body.get("usage") or {}
@@ -292,48 +306,56 @@ async def analyze_document_with_ai(data: bytes, mime: str, filename: str) -> Pay
                 item["field"]: {"confidence": item["confidence"], "evidence": item["evidence"]}
                 for item in evidence if isinstance(item, dict) and item.get("field")
             }
-        return normalize_result(PayslipAIResult.model_validate(parsed))
+        result = normalize_result(PayslipAIResult.model_validate(parsed))
+        _timed("validation", parsing_started)
+        return result
     except (ValueError, TypeError, json.JSONDecodeError) as exc:
         raise PayslipAIError("INVALID_AI_RESPONSE") from exc
 
 
 @router.post("/analyze-payslip-ai", response_model=PayslipAIResult)
-async def analyze_payslip_ai(file: UploadFile = File(...)) -> PayslipAIResult:
+async def analyze_payslip_ai(response: Response, file: UploadFile = File(...)) -> PayslipAIResult:
     started = time.monotonic()
+    timings: dict[str, float] = {}
+    token = _request_timings.set(timings)
     _metrics["analyses"] += 1
-    mime = (file.content_type or "").lower()
-    if mime not in ALLOWED_MIME:
-        raise HTTPException(status_code=415, detail="Formato documento non supportato")
-    data = await file.read(MAX_PAYSLIP_BYTES + 1)
-    await file.close()
-    if len(data) > MAX_PAYSLIP_BYTES:
-        raise HTTPException(status_code=413, detail="Documento troppo grande")
-    if not _valid_signature(data, mime):
-        raise HTTPException(status_code=415, detail="Il contenuto non corrisponde al formato dichiarato")
-
-    suffix = Path(file.filename or "documento").suffix[:10]
-    temporary_path: str | None = None
     try:
-        with tempfile.NamedTemporaryFile(prefix="payslip-", suffix=suffix, delete=False) as temporary:
-            temporary.write(data)
-            temporary_path = temporary.name
-        result = await analyze_document_with_ai(data, mime, Path(file.filename or "documento").name)
+        mime = (file.content_type or "").lower()
+        if mime not in ALLOWED_MIME:
+            raise HTTPException(status_code=415, detail="Formato documento non supportato")
+        data = await file.read(MAX_PAYSLIP_BYTES + 1)
+        _timed("read", started)
+        if len(data) > MAX_PAYSLIP_BYTES:
+            raise HTTPException(status_code=413, detail="Documento troppo grande")
+        if not _valid_signature(data, mime):
+            raise HTTPException(status_code=415, detail="Il contenuto non corrisponde al formato dichiarato")
+        # The document is already in memory. No additional disk copy or original filename.
+        try:
+            async with asyncio.timeout(AI_DEADLINE_SECONDS):
+                result = await analyze_document_with_ai(data, mime, "documento.pdf" if mime == "application/pdf" else "documento.jpg")
+        except TimeoutError as exc:
+            raise PayslipAIError("OPENAI_TIMEOUT") from exc
         _metrics["success"] += 1
+        _timed("total", started)
+        response.headers["Server-Timing"] = ", ".join(f"{name};dur={value:.2f}" for name, value in timings.items())
         return result
+    except HTTPException:
+        raise
     except PayslipAIError as exc:
         code = str(exc)
         status, message = ERROR_STATUS.get(code, (502, "Analisi AI temporaneamente non disponibile"))
-        logger.warning("payslip_ai_failure code=%s mime=%s size=%d", code, mime, len(data))
+        logger.warning("payslip_ai_failure code=%s", code)
         _metrics["failure"] += 1
         raise HTTPException(status_code=status, detail={"code": code, "message": message}) from exc
-    except Exception as exc:
-        logger.exception("payslip_ai_failure code=INVALID_AI_RESPONSE mime=%s size=%d", mime, len(data))
+    except Exception:
+        # Exception messages / tracebacks may contain document or provider input.
+        logger.warning("payslip_ai_failure code=INVALID_AI_RESPONSE")
         _metrics["failure"] += 1
-        raise HTTPException(status_code=502, detail={"code": "INVALID_AI_RESPONSE", "message": "Risposta AI non valida"}) from exc
+        raise HTTPException(status_code=502, detail={"code": "INVALID_AI_RESPONSE", "message": "Risposta AI non valida"}) from None
     finally:
+        await file.close()
         _metrics["latency_ms_total"] += round((time.monotonic() - started) * 1000)
-        if temporary_path:
-            Path(temporary_path).unlink(missing_ok=True)
+        _request_timings.reset(token)
 
 
 def safe_metrics() -> dict[str, int]:

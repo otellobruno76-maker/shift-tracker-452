@@ -1,3 +1,4 @@
+import { bounded } from "./documentPreparation";
 import { emptyPayslipAnalysis, type Confidence, type DetectedValue, type PayslipAnalysis } from "./payslip";
 import type { PayslipItem } from "./types";
 
@@ -91,12 +92,37 @@ export function mergePayslipAnalyses(local: PayslipAnalysis, ai: PayslipAIResult
   return { analysis: merged, conflicts, month, payType };
 }
 
-export async function requestPayslipAI(file: File): Promise<PayslipAIResult> {
-  const body = new FormData(); body.append("file", file, file.name);
+export interface AITimings { requestMs: number; parseMs: number; serverTiming: string | null }
+const requests = new WeakMap<File, Promise<PayslipAIResult>>();
+export function requestPayslipAI(file: File, options: { signal?: AbortSignal; onPhase?: (label: string) => void; onTimings?: (timings: AITimings) => void } = {}): Promise<PayslipAIResult> {
+  const existing = requests.get(file);
+  if (existing) return existing;
+  const promise = performRequest(file, options).catch((error) => { requests.delete(file); throw error; });
+  requests.set(file, promise);
+  return promise;
+}
+
+async function performRequest(file: File, options: { signal?: AbortSignal; onPhase?: (label: string) => void; onTimings?: (timings: AITimings) => void }): Promise<PayslipAIResult> {
+  const controller = new AbortController();
+  const abort = () => controller.abort();
+  if (options.signal?.aborted) throw new Error("Analisi interrotta. Puoi riprovare.");
+  options.signal?.addEventListener("abort", abort, { once: true });
+  const started = performance.now();
+  options.onPhase?.("Analisi del documento…");
+  const slow = setTimeout(() => options.onPhase?.("Il servizio sta impiegando più tempo del previsto. Puoi annullare e riprovare."), 25_000);
+  try {
+    return await bounded(sendRequest(file, controller.signal, options, started), 75_000,
+      "Tempo massimo raggiunto (75 secondi). Il servizio potrebbe essere in avvio. Riprova tra poco oppure continua con i dati locali.", abort);
+  } finally { clearTimeout(slow); options.signal?.removeEventListener("abort", abort); }
+}
+
+async function sendRequest(file: File, signal: AbortSignal, options: { onPhase?: (label: string) => void; onTimings?: (timings: AITimings) => void }, started: number): Promise<PayslipAIResult> {
+  const body = new FormData(); body.append("file", file, file.type === "application/pdf" ? "documento.pdf" : "documento.jpg");
   let response: Response;
   try {
-    response = await fetch(payslipAIEndpoint, { method: "POST", body });
+    response = await fetch(payslipAIEndpoint, { method: "POST", body, signal });
   } catch {
+    if (signal.aborted) throw new Error("Analisi interrotta. Puoi riprovare.");
     console.warn("payslip_ai_failure code=BACKEND_NOT_REACHABLE");
     throw new Error("Backend AI non raggiungibile");
   }
@@ -122,5 +148,13 @@ export async function requestPayslipAI(file: File): Promise<PayslipAIResult> {
     }
     throw new Error(`Servizio AI non disponibile (HTTP ${response.status})`);
   }
-  return response.json() as Promise<PayslipAIResult>;
+  const received = performance.now();
+  options.onPhase?.("Preparazione del risultato…");
+  let result: PayslipAIResult;
+  try {
+    result = await response.json() as PayslipAIResult;
+    if (!result || !result.fields || !Array.isArray(result.overtime_rates) || !Array.isArray(result.overtime_tariffs) || !Array.isArray(result.allowances)) throw new Error();
+  } catch { throw new Error("Risposta AI non valida. Puoi riprovare o continuare in locale."); }
+  options.onTimings?.({ requestMs: received - started, parseMs: performance.now() - received, serverTiming: response.headers.get("Server-Timing") });
+  return result;
 }

@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { BrainCircuit, ChevronLeft, FileSearch, LockKeyhole, Upload } from "lucide-react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
@@ -7,6 +7,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { bounded, prepareDocument } from "@/lib/documentPreparation";
 import { extractDocumentStructure } from "@/lib/documentText";
 import {
   buildPayslipSettingsPatch,
@@ -52,48 +53,70 @@ export default function ConfiguraCedolino() {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [aiConsentOpen, setAiConsentOpen] = useState(false);
   const [aiBusy, setAiBusy] = useState(false);
+  const aiController = useRef<AbortController | null>(null);
+  const mounted = useRef(true);
+  const run = useRef(0);
+  useEffect(() => {
+    const controllerRef = aiController; const runRef = run;
+    mounted.current = true;
+    return () => { mounted.current = false; runRef.current++; controllerRef.current?.abort(); };
+  }, []);
+  const [aiPhase, setAiPhase] = useState("");
+  const [aiError, setAiError] = useState("");
+  const [timing, setTiming] = useState<{ preparationMs?: number; localMs?: number; requestMs?: number; parseMs?: number; serverTiming?: string | null }>({});
   const [conflicts, setConflicts] = useState<string[]>([]);
 
   const analyze = async (file: File) => {
-    setBusy(true);
-    setError("");
-    setAnalysis(null);
-    setReview(null);
-    setFilename(file.name);
-    setSelectedFile(file);
-    setConflicts([]);
+    const attempt = ++run.current;
+    setBusy(true); setError(""); setAiError(""); setAnalysis(null); setReview(null);
+    setFilename(file.name); setSelectedFile(null); setConflicts([]); setTiming({});
+    let input: File;
+    const started = performance.now();
     try {
-      const document = await extractDocumentStructure(file, setProgress);
+      setProgress({ label: "Preparazione documento…", progress: .02 });
+      input = await bounded(prepareDocument(file), 15_000, "Preparazione troppo lenta. Prova una foto più piccola.");
+    } catch (cause) {
+      if (mounted.current && attempt === run.current) { setError(cause instanceof Error ? cause.message : "File non valido"); setBusy(false); }
+      return;
+    }
+    if (!mounted.current || attempt !== run.current) return;
+    setSelectedFile(input);
+    const prepared = performance.now();
+    setTiming({ preparationMs: prepared - started });
+    try {
+      const document = await bounded(extractDocumentStructure(input, (state) => { if (mounted.current && attempt === run.current) setProgress(state); }, true), 35_000, "Lettura locale troppo lenta. Puoi usare l’AI con il tuo consenso o compilare i dati.");
       const detected = analyzeStructuredPayslip(document);
+      if (!mounted.current || attempt !== run.current) return;
       setAnalysis(detected);
       setReview(initialReview(detected, replaced?.month ?? new Date().toISOString().slice(0, 7), settings.dailyOrdinaryHours));
-    } catch {
+    } catch (cause) {
+      if (!mounted.current || attempt !== run.current) return;
       const detected = emptyPayslipAnalysis();
       setAnalysis(detected);
       setReview(initialReview(detected, replaced?.month ?? new Date().toISOString().slice(0, 7), settings.dailyOrdinaryHours));
-      setError("Non siamo riusciti a leggere con sicurezza tutti i dati di questo cedolino. Completa i campi mancanti.");
+      setError(cause instanceof Error ? cause.message : "Lettura locale non riuscita. Usa l’AI con il tuo consenso o completa i campi mancanti.");
     } finally {
-      setBusy(false);
+      if (mounted.current && attempt === run.current) { setTiming((previous) => ({ ...previous, localMs: performance.now() - prepared })); setBusy(false); }
     }
   };
 
   const analyzeWithAI = async () => {
-    if (!selectedFile || !analysis || !review) return;
-    setAiConsentOpen(false);
-    setAiBusy(true);
+    if (!selectedFile || !analysis || !review || aiController.current) return;
+    const controller = new AbortController(); aiController.current = controller;
+    setAiConsentOpen(false); setAiBusy(true); setAiError("");
     try {
-      const ai = await requestPayslipAI(selectedFile);
+      const ai = await requestPayslipAI(selectedFile, { signal: controller.signal, onPhase: setAiPhase, onTimings: (times) => setTiming((previous) => ({ ...previous, ...times })) });
+      if (!mounted.current || controller.signal.aborted) return;
       const merged = mergePayslipAnalyses(analysis, ai);
       const nextReview = initialReview(merged.analysis, merged.month ?? review.month, settings.dailyOrdinaryHours);
       if (merged.payType) nextReview.payType = merged.payType;
-      setAnalysis(merged.analysis);
-      setReview(nextReview);
-      setConflicts(merged.conflicts);
+      setAnalysis(merged.analysis); setReview(nextReview); setConflicts(merged.conflicts);
       toast.success("Analisi AI completata. Controlla tutti i valori prima di salvare.");
     } catch (cause) {
-      toast.error(cause instanceof Error ? cause.message : "Analisi AI temporaneamente non disponibile");
+      if (mounted.current) setAiError(cause instanceof Error ? cause.message : "Analisi AI temporaneamente non disponibile");
     } finally {
-      setAiBusy(false);
+      aiController.current = null;
+      if (mounted.current) setAiBusy(false);
     }
   };
 
@@ -217,7 +240,7 @@ export default function ConfiguraCedolino() {
           <input
             ref={fileRef}
             type="file"
-            accept="application/pdf,image/*"
+            accept="application/pdf,image/jpeg,image/png,image/webp"
             className="hidden"
             data-testid="payslip-file-input"
             onChange={(event) => {
@@ -258,10 +281,15 @@ export default function ConfiguraCedolino() {
 
       {analysis && review && (
         <>
+        {error && <p role="alert" className="mt-3 rounded-xl bg-orange-50 p-3 text-sm text-orange-900">{error}</p>}
         <section className="mt-4 rounded-2xl border border-[#C4B5FD] bg-[#F5F3FF] p-4">
           <div className="flex gap-3"><BrainCircuit className="h-6 w-6 shrink-0 text-[#6D28D9]" /><div><h2 className="font-extrabold text-[#4C1D95]">Analisi avanzata con AI</h2><p className="mt-1 text-sm text-[#5B21B6]">Facoltativa. Confronta il documento con la lettura locale e segnala eventuali conflitti.</p></div></div>
-          <Button variant="outline" className="mt-3 h-12 w-full border-[#8B5CF6] text-[#5B21B6]" disabled={!selectedFile || aiBusy} onClick={() => setAiConsentOpen(true)}>{aiBusy ? "Analisi AI in corso…" : "Avvia analisi avanzata con AI"}</Button>
+          <Button variant="outline" className="mt-3 h-12 w-full border-[#8B5CF6] text-[#5B21B6]" disabled={!selectedFile || aiBusy} onClick={() => setAiConsentOpen(true)}>{aiBusy ? aiPhase : aiError ? "Riprova analisi con AI" : "Avvia analisi avanzata con AI"}</Button>
         </section>
+        {aiBusy && <div role="status" className="mt-2 text-sm"><p>{aiPhase}</p><Button variant="outline" onClick={() => aiController.current?.abort()}>Annulla analisi</Button></div>}
+        {aiError && <p role="alert" className="mt-2 rounded-xl bg-red-50 p-3 text-sm text-red-800">{aiError}</p>}
+        <details className="mt-2 text-sm"><summary>Tempi di lettura</summary><p>Preparazione: {((timing.preparationMs ?? 0) / 1000).toFixed(1)} s · Lettura locale: {((timing.localMs ?? 0) / 1000).toFixed(1)} s</p>{timing.requestMs !== undefined && <p>Richiesta AI: {(timing.requestMs / 1000).toFixed(1)} s · Risultato: {((timing.parseMs ?? 0) / 1000).toFixed(2)} s</p>}</details>
+        <fieldset disabled={aiBusy}>
         {conflicts.length > 0 && <section className="mt-4 rounded-2xl border border-[#F59E0B] bg-[#FFFBEB] p-4"><h2 className="font-extrabold text-[#92400E]">Valori da verificare</h2><p className="mt-1 text-sm text-[#92400E]">La lettura locale e l’AI non concordano. Non abbiamo scelto automaticamente.</p><ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-[#78350F]">{conflicts.map((item) => <li key={item}>{item}</li>)}</ul></section>}
         <Review
           analysis={analysis}
@@ -278,6 +306,7 @@ export default function ConfiguraCedolino() {
           }}
           onConfirm={confirm}
         />
+        </fieldset>
         </>
       )}
       <Dialog open={aiConsentOpen} onOpenChange={setAiConsentOpen}>

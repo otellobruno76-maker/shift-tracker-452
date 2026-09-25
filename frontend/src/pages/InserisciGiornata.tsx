@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import {
   BedDouble,
@@ -13,6 +13,7 @@ import {
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { toast } from "sonner";
+import DayNavigator from "@/components/DayNavigator";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
@@ -33,6 +34,7 @@ import {
   saveDayTemplate,
   saveEntry,
   useDays,
+  useAppReady,
   useDayTemplates,
   useSettings,
 } from "@/lib/store";
@@ -56,11 +58,14 @@ const PAUSE_OPTIONS: Array<{ value: string; label: string }> = [
 
 export default function InserisciGiornata() {
   const location = useLocation();
+  const ready = useAppReady();
+  const days = useDays();
   const params = useMemo(() => new URLSearchParams(location.search), [location.search]);
+  if (!ready) return <p>Caricamento giornate…</p>;
   return (
     <FormBody
       key={location.key}
-      editId={params.get("id")}
+      editId={params.get("id") ?? (!params.get("copia") ? days.find((entry) => entry.date === params.get("data"))?.id ?? null : null)}
       copiaId={params.get("copia")}
       prefillDate={params.get("data")}
     />
@@ -101,7 +106,7 @@ function FormBody({
   const [festivoManual, setFestivoManual] = useState(source ? source.festivo === true : false);
   const [festivoTouched, setFestivoTouched] = useState(source !== undefined && source.festivo !== null);
   const [note, setNote] = useState(source?.note ?? "");
-  const scheduledMode = Boolean(editId && source?.scheduledOrdinaryMinutes !== undefined);
+  const [scheduledMode, setScheduledMode] = useState(Boolean(editId && source?.scheduledOrdinaryMinutes !== undefined));
   const [scheduledHours, setScheduledHours] = useState(String((source?.scheduledOrdinaryMinutes ?? settings.dailyOrdinaryHours * 60) / 60));
   const [scheduledOvertime, setScheduledOvertime] = useState(String((source?.manualOvertimeMinutes ?? 0) / 60));
   const [templateDialogOpen, setTemplateDialogOpen] = useState(false);
@@ -120,7 +125,18 @@ function FormBody({
   const dailyLimit = Math.max(0, settings.dailyOrdinaryHours) * 60;
   const ordinaryPreview = net !== null ? Math.min(net, dailyLimit) : 0;
 
+  const snapshot = JSON.stringify([date, dayType, start, end, breakChoice, breakCustom, notturnoManual, reperibilita, trasferta, festivoManual, note, scheduledHours, scheduledOvertime, scheduledMode]);
+  const original = useRef(snapshot);
+  const selectDay = (nextDate: string) => {
+    if (!nextDate || nextDate === date) return;
+    if (snapshot !== original.current && !window.confirm("Ci sono modifiche non salvate. Vuoi cambiare giorno senza salvarle?")) return;
+    const existing = days.find((entry) => entry.date === nextDate);
+    navigate(existing ? `/inserisci?id=${encodeURIComponent(existing.id)}` : `/inserisci?data=${nextDate}`, { replace: true });
+    window.scrollTo({ top: 0, behavior: "auto" });
+  };
+
   const applyTemplate = (template: DayTemplate) => {
+    setScheduledMode(false);
     setDayType(template.dayType);
     setStart(template.start);
     setEnd(template.end);
@@ -239,7 +255,9 @@ function FormBody({
     };
     saveEntry(entry);
     toast.success(editId ? "Giornata aggiornata." : "Giornata salvata.");
-    navigate("/");
+    original.current = snapshot;
+    navigate(`/inserisci?id=${encodeURIComponent(entry.id)}`, { replace: true });
+    window.scrollTo({ top: 0, behavior: "auto" });
   };
 
   return (
@@ -262,6 +280,9 @@ function FormBody({
           {editId ? "Modifica giornata" : copiaId ? "Duplica giornata" : "Nuova giornata"}
         </h1>
       </header>
+
+      <DayNavigator date={date || todayISO()} days={days} onSelect={selectDay} />
+      {days.filter((entry) => entry.date === date).length > 1 && <div className="mt-2 flex flex-wrap gap-2">{days.filter((entry) => entry.date === date).map((entry, index) => <Button key={entry.id} variant="outline" onClick={() => { if (snapshot === original.current || window.confirm("Cambiare turno senza salvare?")) navigate(`/inserisci?id=${encodeURIComponent(entry.id)}`, { replace: true }); }}>Turno {index + 1}</Button>)}</div>}
 
       {copiaId && source && (
         <p
@@ -368,14 +389,14 @@ function FormBody({
           className="mt-1 h-14 text-lg"
           value={date}
           data-testid="input-entry-date"
-          onChange={(e) => setDate(e.target.value)}
+          onChange={(e) => copiaId ? setDate(e.target.value) : selectDay(e.target.value)}
         />
         <div className="mt-2 flex gap-2">
           <Button
             variant="outline"
             className="h-11 px-5 text-sm font-bold"
             data-testid="quick-date-today"
-            onClick={() => setDate(todayISO())}
+            onClick={() => copiaId ? setDate(todayISO()) : selectDay(todayISO())}
           >
             Oggi
           </Button>
@@ -386,7 +407,7 @@ function FormBody({
             onClick={() => {
               const d = new Date();
               d.setDate(d.getDate() - 1);
-              setDate(toISODate(d));
+              if (copiaId) setDate(toISODate(d)); else selectDay(toISODate(d));
             }}
           >
             Ieri

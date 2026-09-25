@@ -222,3 +222,54 @@ def test_codici_diagnostici_sicuri(monkeypatch, code, status):
     response = app_client().post("/api/analyze-payslip-ai", files={"file": ("x.pdf", b"%PDF-ok", "application/pdf")})
     assert response.status_code == status
     assert response.json()["detail"] == {"code": code, "message": payslip_ai.ERROR_STATUS[code][1]}
+
+
+def test_tempi_header_senza_dati_personali(monkeypatch):
+    install_success(monkeypatch)
+    response = app_client().post('/api/analyze-payslip-ai', files={'file': ('persona.pdf', b'%PDF-ok', 'application/pdf')})
+    assert response.status_code == 200
+    header = response.headers['Server-Timing']
+    assert 'read;dur=' in header and 'total;dur=' in header
+    assert 'persona' not in header
+
+
+def test_nessuna_copia_temporanea_e_nome_generico(monkeypatch):
+    import tempfile
+    def forbidden(*args, **kwargs):
+        raise AssertionError('unexpected document disk copy')
+    monkeypatch.setattr(tempfile, 'NamedTemporaryFile', forbidden)
+    async def inspect(data, mime, filename):
+        assert filename == 'documento.pdf'
+        return result()
+    monkeypatch.setattr(payslip_ai, 'analyze_document_with_ai', inspect)
+    assert app_client().post('/api/analyze-payslip-ai', files={'file': ('nome-personale.pdf', b'%PDF-ok', 'application/pdf')}).status_code == 200
+
+
+def test_deadline_backend_interrompe_analisi_lenta(monkeypatch):
+    import asyncio
+    async def slow(*args):
+        await asyncio.sleep(1)
+        return result()
+    monkeypatch.setattr(payslip_ai, 'AI_DEADLINE_SECONDS', 0.01)
+    monkeypatch.setattr(payslip_ai, 'analyze_document_with_ai', slow)
+    response = app_client().post('/api/analyze-payslip-ai', files={'file': ('x.pdf', b'%PDF-ok', 'application/pdf')})
+    assert response.status_code == 504
+    assert response.json()['detail']['code'] == 'OPENAI_TIMEOUT'
+
+
+def test_eccezione_non_registra_contenuto(monkeypatch, caplog):
+    async def broken(*args):
+        raise ValueError('CONTENUTO_PRIVATO_TEST')
+    monkeypatch.setattr(payslip_ai, 'analyze_document_with_ai', broken)
+    response = app_client().post('/api/analyze-payslip-ai', files={'file': ('x.pdf', b'%PDF-ok', 'application/pdf')})
+    assert response.status_code == 502
+    assert 'CONTENUTO_PRIVATO_TEST' not in caplog.text
+    assert 'CONTENUTO_PRIVATO_TEST' not in response.text
+
+
+def test_file_corrotto_non_chiama_ai(monkeypatch):
+    async def forbidden(*args):
+        raise AssertionError('AI should not run')
+    monkeypatch.setattr(payslip_ai, 'analyze_document_with_ai', forbidden)
+    response = app_client().post('/api/analyze-payslip-ai', files={'file': ('x.jpg', b'broken', 'image/jpeg')})
+    assert response.status_code == 415

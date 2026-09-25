@@ -27,10 +27,9 @@ export default function Oggi() {
   const todayNet = todayEntries.reduce((sum, d) => sum + entryNetMinutes(d), 0);
   const recent = useMemo(
     () =>
-      [...days]
-        .sort((a, b) => b.date.localeCompare(a.date) || b.createdAt.localeCompare(a.createdAt))
-        .slice(0, 5),
-    [days],
+      days.filter((entry) => entry.date.startsWith(selectedMonth))
+        .sort((a, b) => a.date.localeCompare(b.date) || a.createdAt.localeCompare(b.createdAt)),
+    [days, selectedMonth],
   );
 
   return (
@@ -137,7 +136,7 @@ export default function Oggi() {
       </section>
 
       <Link
-        to="/inserisci"
+        to={`/inserisci?data=${selectedMonth === today.slice(0, 7) ? today : `${selectedMonth}-01`}`}
         data-testid="btn-add-entry-main"
         className={buttonVariants({
           className: "mt-4 h-16 w-full rounded-2xl text-lg font-extrabold shadow-lg",
@@ -148,8 +147,8 @@ export default function Oggi() {
       </Link>
 
       <section className="mt-6">
-        <h2 className="text-sm font-bold uppercase tracking-wider text-[#64748B]">Ultime giornate</h2>
-        <div className="mt-2 space-y-2">
+        <h2 className="text-sm font-bold uppercase tracking-wider text-[#64748B]">Giornate del mese</h2>
+        <div className="mt-2 max-h-96 space-y-2 overflow-y-auto">
           {recent.length === 0 && (
             <p
               className="rounded-2xl border border-[#E2E5EA] bg-white p-4 text-sm text-[#64748B]"

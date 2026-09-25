@@ -96,7 +96,7 @@ export default function Impostazioni() {
             </div>
           </div>
         )}
-        <p className="text-xs text-[#64748B]">Il documento non viene salvato né inviato a servizi esterni. I risultati sono una stima: verifica consigliata.</p>
+        <p className="text-xs text-[#64748B]">La lettura locale resta sul dispositivo. Solo con il tuo consenso l’analisi AI invia il documento al servizio esterno. Verifica sempre i risultati.</p>
       </Section>
 
       <Section title="Orario ordinario" testid="settings-schedule">

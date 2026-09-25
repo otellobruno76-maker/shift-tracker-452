@@ -18,6 +18,8 @@ const emergentOverlayDisabled = process.env.DISABLE_EMERGENT_OVERLAY === "true";
 const localOcrFiles = {
   "/ocr/worker.min.js": "node_modules/tesseract.js/dist/worker.min.js",
   "/ocr/tesseract-core-simd-lstm.wasm.js": "node_modules/tesseract.js-core/tesseract-core-simd-lstm.wasm.js",
+  "/ocr/tesseract-core-lstm.wasm.js": "node_modules/tesseract.js-core/tesseract-core-lstm.wasm.js",
+  "/ocr/tesseract-core-relaxedsimd-lstm.wasm.js": "node_modules/tesseract.js-core/tesseract-core-relaxedsimd-lstm.wasm.js",
   "/ocr/ita.traineddata.gz": "node_modules/@tesseract.js-data/ita/4.0.0_best_int/ita.traineddata.gz",
 } as const;
 

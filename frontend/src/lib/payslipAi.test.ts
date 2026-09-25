@@ -69,3 +69,39 @@ describe("merge lettura locale e analisi AI", () => {
     expect(mergePayslipAnalyses(local, result).analysis.basePay.value).toBe(10);
   });
 });
+
+describe('attese e richieste duplicate', () => {
+  it('riusa la stessa richiesta in corso e il risultato per il file selezionato',async () => {
+    const file=new File(['%PDF-ok'],'cache.pdf',{type:'application/pdf'});
+    vi.stubGlobal('fetch',vi.fn().mockResolvedValue(new Response(JSON.stringify(ai()))));
+    const first=requestPayslipAI(file);const second=requestPayslipAI(file);
+    expect(first).toBe(second);await first;await requestPayslipAI(file);expect(fetch).toHaveBeenCalledTimes(1);
+  });
+  it('interrompe una risposta lenta entro il limite, permette un nuovo tentativo',async () => {
+    vi.useFakeTimers();
+    try {
+      const file=new File(['%PDF-ok'],'slow.pdf',{type:'application/pdf'});
+      vi.stubGlobal('fetch',vi.fn().mockImplementation((_url,options)=>new Promise((_resolve,reject)=>options.signal.addEventListener('abort',()=>reject(new DOMException('aborted','AbortError'))))));
+      const onPhase=vi.fn();const pending=requestPayslipAI(file,{onPhase});const assertion=expect(pending).rejects.toThrow('75 secondi');
+      await vi.advanceTimersByTimeAsync(25_000);expect(onPhase).toHaveBeenLastCalledWith(expect.stringContaining('più tempo'));
+      await vi.advanceTimersByTimeAsync(50_000);await assertion;
+      vi.stubGlobal('fetch',vi.fn().mockResolvedValue(new Response(JSON.stringify(ai()))));
+      await expect(requestPayslipAI(file)).resolves.toMatchObject({level:'2'});
+    } finally {vi.useRealTimers();}
+  });
+  it('consente di annullare senza aspettare il backend',async () => {
+    const file=new File(['%PDF-ok'],'cancel.pdf',{type:'application/pdf'});const controller=new AbortController();
+    vi.stubGlobal('fetch',vi.fn().mockImplementation((_url,options)=>new Promise((_resolve,reject)=>options.signal.addEventListener('abort',()=>reject(new DOMException('aborted','AbortError'))))));
+    const pending=requestPayslipAI(file,{signal:controller.signal});controller.abort();await expect(pending).rejects.toThrow('interrotta');
+  });
+  it('non memorizza un errore backend e può riprovare',async () => {
+    const file=new File(['%PDF-ok'],'retry.pdf',{type:'application/pdf'});
+    vi.stubGlobal('fetch',vi.fn().mockResolvedValueOnce(new Response(null,{status:503})).mockResolvedValueOnce(new Response(JSON.stringify(ai()))));
+    await expect(requestPayslipAI(file)).rejects.toThrow('503');await expect(requestPayslipAI(file)).resolves.toMatchObject({level:'2'});expect(fetch).toHaveBeenCalledTimes(2);
+  });
+  it('misura la risposta senza includere il documento',async () => {
+    const file=new File(['%PDF-ok'],'privacy.pdf',{type:'application/pdf'});const onTimings=vi.fn();
+    vi.stubGlobal('fetch',vi.fn().mockResolvedValue(new Response(JSON.stringify(ai()),{headers:{'Server-Timing':'openai;dur=100'}})));
+    await requestPayslipAI(file,{onTimings});expect(onTimings).toHaveBeenCalledWith({requestMs:expect.any(Number),parseMs:expect.any(Number),serverTiming:'openai;dur=100'});
+  });
+});
