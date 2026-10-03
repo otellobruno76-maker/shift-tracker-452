@@ -27,12 +27,50 @@ cd frontend && yarn dev                                                # http://
 Per pubblicare soltanto il servizio opzionale di analisi AI, senza database:
 
 ```bash
-cd backend && uvicorn payslip_server:app --host 0.0.0.0 --port "$PORT"
+cd backend && uvicorn payslip_server:app --host 0.0.0.0 --port "$PORT" --workers 1 --no-proxy-headers
 ```
 
 Configurare nel backend `OPENAI_API_KEY` come secret, `OPENAI_PAYSLIP_MODEL`
 e `CORS_ORIGINS`. Nel build del frontend impostare soltanto l'URL pubblico non
 segreto `VITE_AI_API_BASE_URL`; la chiave OpenAI non deve mai essere esposta al browser.
+
+### Protezione dell'endpoint AI
+
+`POST /api/analyze-payslip-ai` è gestito dal servizio FastAPI dedicato
+`backend/payslip_server.py` e dal router `backend/lib/payslip_ai.py`. Il frontend
+invia il documento solo dopo il consenso, direttamente all'URL del servizio AI.
+Il servizio non dispone di login, cookie di sessione o ID account verificati:
+un indirizzo IP limita l'abuso, ma non costituisce una quota per utente.
+
+| Variabile backend | Default | Funzione |
+| --- | ---: | --- |
+| `AI_MAX_UPLOAD_BYTES` | `15728640` (15 MiB) | Dimensione massima del file; il corpo multipart ha un ulteriore margine limitato. |
+| `AI_MULTIPART_OVERHEAD_BYTES` | `16384` (16 KiB) | Margine massimo per boundary e intestazioni multipart. |
+| `AI_RATE_LIMIT_REQUESTS` | `6` | Richieste per client di rete nella finestra mobile. |
+| `AI_RATE_LIMIT_WINDOW_SECONDS` | `60` | Durata della finestra del rate limit. |
+| `AI_RATE_CLIENTS_MAX` | `10000` | Numero massimo di client di rete tenuti nei contatori in memoria; nuovi client ricevono HTTP 429 finché gli altri scadono. |
+| `AI_MAX_CONCURRENT_ANALYSES` | `2` | Numero massimo di richieste AI contemporanee per processo; le eccedenze ricevono HTTP 503. |
+| `AI_DAILY_ANALYSIS_LIMIT` | `200` | Ammissioni alle analisi AI per giorno UTC e per processo; oltre il limite, HTTP 429. |
+| `AI_TRUSTED_PROXY_CIDRS` | vuoto | IP/reti dei soli proxy fidati, separati da virgole; abilita la lettura della catena `X-Forwarded-For` a partire dal peer verificato. |
+
+Il limite sul corpo HTTP viene applicato all'ingresso ASGI: le richieste con
+`Content-Length` eccessivo sono respinte prima del parsing multipart; per le
+altre, la lettura viene interrotta durante lo streaming non appena supera il
+limite, con HTTP 413 e senza completare il caricamento o chiamare OpenAI.
+La route controlla di nuovo la dimensione esatta del file prima di chiamare
+OpenAI. I contatori sono mantenuti in memoria, quindi si azzerano al riavvio e
+non si condividono tra worker o istanze. Il budget del progetto OpenAI resta il
+limite esterno da impostare per contenere la spesa anche in caso di riavvii.
+
+Prima del prossimo deploy su Render, impostare il comando di avvio indicato
+sopra, con `--workers 1 --no-proxy-headers`: Uvicorn altrimenti può riscrivere
+l'IP del peer dai forwarded header prima che il servizio verifichi il proxy.
+Lasciare `AI_TRUSTED_PROXY_CIDRS` vuoto finché gli indirizzi effettivi dei proxy
+Render e il loro comportamento su `X-Forwarded-For` non sono verificati. Con la
+variabile vuota, i forwarded header inviati dal client sono ignorati; se Render
+concentra le richieste dietro un peer condiviso, più utenti condivideranno il
+rate limit. Una vera quota per account richiederà autenticazione verificata e un
+contatore persistente condiviso tra le istanze.
 
 ## The `/api` proxy convention
 

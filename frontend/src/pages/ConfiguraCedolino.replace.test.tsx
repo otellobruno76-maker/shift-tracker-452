@@ -189,3 +189,25 @@ describe("sostituzione di un cedolino già corretto", () => {
     await waitFor(async () => expect((await saved(testFilenames[1]))?.month).toBe("2026-08"));
   });
 });
+
+describe("errore dell’analisi AI nella revisione", () => {
+  it("mostra il limite raggiunto, conserva la lettura locale e consente di riprovare", async () => {
+    const message = "Troppe richieste di analisi AI. Attendi qualche minuto prima di riprovare o continua con i dati locali.";
+    mocks.structured.mockReturnValue(analysis(10, 1500, 30));
+    mocks.ai.mockRejectedValueOnce(new Error(message)).mockResolvedValueOnce(aiResult());
+
+    mount("/configura-cedolino");
+    await upload("rate-limit.pdf");
+    fireEvent.click(screen.getByRole("button", { name: "Avvia analisi avanzata con AI" }));
+    fireEvent.click(screen.getByTestId("btn-confirm-ai"));
+
+    expect((await screen.findByRole("alert")).textContent).toBe(message);
+    expect((screen.getByRole("textbox", { name: "Paga oraria di riferimento" }) as HTMLInputElement).value).toBe("10");
+    expect((screen.getByTestId("btn-apply-payslip") as HTMLButtonElement).disabled).toBe(false);
+
+    fireEvent.click(screen.getByRole("button", { name: "Riprova analisi con AI" }));
+    fireEvent.click(screen.getByTestId("btn-confirm-ai"));
+    await waitFor(() => expect(mocks.ai).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.queryByText(message)).toBeNull());
+  });
+});

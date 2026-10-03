@@ -14,11 +14,13 @@ from contextvars import ContextVar
 from typing import Literal
 
 import httpx
-from fastapi import APIRouter, File, HTTPException, UploadFile, Response
+from fastapi import APIRouter, File, HTTPException, Request, UploadFile, Response
 from pydantic import BaseModel, Field
 
+from lib.ai_protection import DEFAULT_MAX_UPLOAD_BYTES
+
 router = APIRouter()
-MAX_PAYSLIP_BYTES = 15 * 1024 * 1024
+MAX_PAYSLIP_BYTES = DEFAULT_MAX_UPLOAD_BYTES
 ALLOWED_MIME = {"application/pdf", "image/jpeg", "image/png", "image/webp"}
 logger = logging.getLogger(__name__)
 _metrics = Counter()
@@ -319,21 +321,37 @@ async def analyze_document_with_ai(data: bytes, mime: str, filename: str) -> Pay
 
 
 @router.post("/analyze-payslip-ai", response_model=PayslipAIResult)
-async def analyze_payslip_ai(response: Response, file: UploadFile = File(...)) -> PayslipAIResult:
+async def analyze_payslip_ai(request: Request, response: Response, file: UploadFile = File(...)) -> PayslipAIResult:
     started = time.monotonic()
     timings: dict[str, float] = {}
     token = _request_timings.set(timings)
     _metrics["analyses"] += 1
     try:
+        guard = getattr(request.app.state, "ai_protection", None)
+        if guard is None:
+            raise HTTPException(
+                status_code=503,
+                detail={"code": "AI_BUSY", "message": "Servizio AI temporaneamente non disponibile"},
+            )
         mime = (file.content_type or "").lower()
         if mime not in ALLOWED_MIME:
             raise HTTPException(status_code=415, detail="Formato documento non supportato")
-        data = await file.read(MAX_PAYSLIP_BYTES + 1)
+        data = await file.read(guard.config.max_upload_bytes + 1)
         _timed("read", started)
-        if len(data) > MAX_PAYSLIP_BYTES:
-            raise HTTPException(status_code=413, detail="Documento troppo grande")
+        if len(data) > guard.config.max_upload_bytes:
+            raise HTTPException(
+                status_code=413,
+                detail={"code": "UPLOAD_TOO_LARGE", "message": "Documento troppo grande"},
+            )
         if not _valid_signature(data, mime):
             raise HTTPException(status_code=415, detail="Il contenuto non corrisponde al formato dichiarato")
+        retry_after = guard.claim_daily_analysis()
+        if retry_after is not None:
+            raise HTTPException(
+                status_code=429,
+                detail={"code": "AI_DAILY_LIMIT", "message": "Limite giornaliero del servizio AI raggiunto"},
+                headers={"Retry-After": str(retry_after)},
+            )
         # The document is already in memory. No additional disk copy or original filename.
         try:
             async with asyncio.timeout(AI_DEADLINE_SECONDS):

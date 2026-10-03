@@ -11,6 +11,7 @@ import os
 from fastapi import APIRouter, FastAPI
 from starlette.middleware.cors import CORSMiddleware
 
+from lib.ai_protection import install_ai_protection
 from lib.payslip_ai import router as payslip_ai_router, safe_metrics
 
 
@@ -40,11 +41,12 @@ async def metrics() -> dict[str, int]:
 
 app.include_router(api_router)
 app.include_router(payslip_ai_router, prefix="/api")
+install_ai_protection(app)
 app.add_middleware(
     CORSMiddleware,
     allow_credentials=False,
     allow_origins=_cors_origins(),
     allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["Content-Type"],
-    expose_headers=["Server-Timing"],
+    expose_headers=["Server-Timing", "Retry-After"],
 )

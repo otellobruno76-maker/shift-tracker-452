@@ -17,6 +17,7 @@ load_dotenv(ROOT_DIR / '.env')
 
 # MongoDB connection
 from lib.db import client, db, ensure_indexes
+from lib.ai_protection import install_ai_protection
 from lib.payslip_ai import router as payslip_ai_router
 
 
@@ -65,12 +66,14 @@ async def get_status_checks():
 app.include_router(api_router)
 app.include_router(payslip_ai_router, prefix="/api")
 
+install_ai_protection(app)
 app.add_middleware(
     CORSMiddleware,
     allow_credentials=True,
     allow_origins=os.environ.get('CORS_ORIGINS', '*').split(','),
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["Server-Timing", "Retry-After"],
 )
 
 # Configure logging

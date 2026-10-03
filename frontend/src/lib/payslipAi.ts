@@ -132,6 +132,9 @@ async function sendRequest(file: File, signal: AbortSignal, options: { onPhase?:
       const payload = await response.json() as { detail?: string | { code?: string } };
       code = typeof payload.detail === "object" ? payload.detail?.code ?? "" : "";
     } catch { /* risposta non JSON: tipica di proxy/static hosting */ }
+    if (response.status === 413) throw new Error("Il documento è troppo grande per l’analisi AI. Usa un file più piccolo o continua con i dati locali.");
+    if (response.status === 429) throw new Error("Troppe richieste di analisi AI. Attendi qualche minuto prima di riprovare o continua con i dati locali.");
+    if (response.status === 503 && code === "AI_BUSY") throw new Error("Il servizio AI è temporaneamente saturo. Riprova tra poco o continua con i dati locali.");
     const messages: Record<string, string> = {
       AI_NOT_CONFIGURED: "Chiave API non configurata",
       INVALID_API_KEY: "Chiave API non valida",
@@ -146,7 +149,7 @@ async function sendRequest(file: File, signal: AbortSignal, options: { onPhase?:
       console.warn(`payslip_ai_failure code=BACKEND_NOT_REACHABLE status=${response.status}`);
       throw new Error("Backend AI non raggiungibile");
     }
-    throw new Error(`Servizio AI non disponibile (HTTP ${response.status})`);
+    throw new Error("Analisi AI temporaneamente non disponibile. Riprova più tardi o continua con i dati locali.");
   }
   const received = performance.now();
   options.onPhase?.("Preparazione del risultato…");

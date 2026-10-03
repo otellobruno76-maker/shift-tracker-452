@@ -41,6 +41,37 @@ describe("diagnostica endpoint AI", () => {
   });
 });
 
+describe("errori dei controlli sull’endpoint AI", () => {
+  it.each([
+    { status: 413, body: JSON.stringify({ detail: "Documento troppo grande" }), message: "Il documento è troppo grande per l’analisi AI." },
+    { status: 429, body: "<html>rate limit</html>", message: "Troppe richieste di analisi AI." },
+    { status: 503, body: JSON.stringify({ detail: { code: "AI_BUSY" } }), message: "Il servizio AI è temporaneamente saturo." },
+  ])("mostra un messaggio utile per HTTP $status, anche senza un codice JSON", async ({ status, body, message }) => {
+    const file = new File(["%PDF-test"], `status-${status}.pdf`, { type: "application/pdf" });
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(body, { status })));
+
+    await expect(requestPayslipAI(file)).rejects.toThrow(message);
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    { body: JSON.stringify({ detail: { code: "AI_NOT_CONFIGURED" } }), message: "Chiave API non configurata" },
+    { body: "<html>Service unavailable</html>", message: "Analisi AI temporaneamente non disponibile." },
+  ])("distingue un diagnostico noto da un 503 del proxy", async ({ body, message }) => {
+    const file = new File(["%PDF-test"], `service-${message}.pdf`, { type: "application/pdf" });
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(body, { status: 503 })));
+
+    await expect(requestPayslipAI(file)).rejects.toThrow(message);
+  });
+
+  it("non espone il corpo di un errore generico del servizio", async () => {
+    const file = new File(["%PDF-test"], "generic-error.pdf", { type: "application/pdf" });
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("Traceback: private-token", { status: 500 })));
+
+    await expect(requestPayslipAI(file)).rejects.toThrow("Analisi AI temporaneamente non disponibile. Riprova più tardi o continua con i dati locali.");
+  });
+});
+
 describe("merge lettura locale e analisi AI", () => {
   it("mantiene il caso sintetico INAZ senza inventare altri valori", () => {
     const merged = mergePayslipAnalyses(emptyPayslipAnalysis(), ai());
@@ -97,7 +128,7 @@ describe('attese e richieste duplicate', () => {
   it('non memorizza un errore backend e può riprovare',async () => {
     const file=new File(['%PDF-ok'],'retry.pdf',{type:'application/pdf'});
     vi.stubGlobal('fetch',vi.fn().mockResolvedValueOnce(new Response(null,{status:503})).mockResolvedValueOnce(new Response(JSON.stringify(ai()))));
-    await expect(requestPayslipAI(file)).rejects.toThrow('503');await expect(requestPayslipAI(file)).resolves.toMatchObject({level:'2'});expect(fetch).toHaveBeenCalledTimes(2);
+    await expect(requestPayslipAI(file)).rejects.toThrow('temporaneamente non disponibile');await expect(requestPayslipAI(file)).resolves.toMatchObject({level:'2'});expect(fetch).toHaveBeenCalledTimes(2);
   });
   it('misura la risposta senza includere il documento',async () => {
     const file=new File(['%PDF-ok'],'privacy.pdf',{type:'application/pdf'});const onTimings=vi.fn();

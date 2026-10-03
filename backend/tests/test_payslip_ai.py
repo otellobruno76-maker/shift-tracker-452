@@ -3,6 +3,7 @@ from fastapi.testclient import TestClient
 import pytest
 from pydantic import ValidationError
 
+from lib.ai_protection import install_ai_protection
 from lib import payslip_ai
 from payslip_server import app as payslip_app
 
@@ -10,6 +11,7 @@ from payslip_server import app as payslip_app
 def app_client() -> TestClient:
     app = FastAPI()
     app.include_router(payslip_ai.router, prefix="/api")
+    install_ai_protection(app)
     return TestClient(app)
 
 
