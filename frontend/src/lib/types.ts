@@ -76,6 +76,8 @@ export interface PayslipRecord {
   items?: PayslipItem[];
   /** Provenienza dei campi confermati (locale, AI o modifica manuale). */
   fieldProvenance?: Record<string, PayslipFieldProvenance>;
+  /** Scelte esplicite conservate per una successiva sostituzione del documento. */
+  reviewDecisions?: PayslipReviewDecisions;
   uploadedAt: string;
   updatedAt: string;
 }
@@ -97,6 +99,47 @@ export interface PayslipItem {
   confidence: "alta" | "media" | "bassa";
   source: PayslipDataSource;
   note?: string;
+}
+
+export interface SavedReviewFieldDecision {
+  value: string;
+  selected?: boolean;
+  edited: boolean;
+  selectionTouched: boolean;
+}
+
+export interface SavedReviewRowDecision {
+  selected: boolean;
+  valueEdited: boolean;
+  decisionTouched: boolean;
+}
+
+export interface SavedAllowanceDecision extends SavedReviewRowDecision {
+  name: string;
+  amountText: string;
+}
+
+export interface SavedTotalDecision extends SavedReviewRowDecision {
+  label: string;
+  valueText: string;
+}
+
+export interface SavedItemDecision extends SavedReviewRowDecision {
+  originalDescription: string;
+  category: PayslipItemCategory;
+  unit: PayslipItemUnit;
+  quantityText: string;
+  ratePctText: string;
+  amountText: string;
+  source?: PayslipDataSource;
+  confidence?: PayslipItem["confidence"];
+}
+
+export interface PayslipReviewDecisions {
+  fields: Record<string, SavedReviewFieldDecision>;
+  allowances: SavedAllowanceDecision[];
+  totals: SavedTotalDecision[];
+  items: SavedItemDecision[];
 }
 
 export interface PayslipFieldProvenance {

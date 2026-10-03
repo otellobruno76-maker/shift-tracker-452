@@ -67,6 +67,38 @@ describe("compilazione assistita del cedolino", () => {
     expect(review.selected.grossTotal).toBe(false);
   });
 
+  it.each(["Competenze accessorie", "Competenze ordinarie", "Arretrati competenze", "Indennità per competenze speciali"])(
+    "mantiene la voce retributiva %s durante revisione e conferma", (description) => {
+      const analysis = emptyPayslipAnalysis();
+      const category = description === "Competenze accessorie" ? "ordinary" : "earnings";
+      analysis.items = [{ originalDescription: description, category, quantity: null, unit: "euro", ratePct: null, amount: 120, confidence: "alta", source: "ai" }];
+      const review = initialReview(analysis, "2026-09");
+      expect(review.grossTotal).toBe("");
+      expect(review.items).toMatchObject([{ originalDescription: description, category, selected: true }]);
+      expect(confirmReviewValues(review).items).toMatchObject([{ originalDescription: description, category, amount: 120 }]);
+    },
+  );
+
+  it("riconosce Totale competenze come lordo senza duplicarlo nelle voci", () => {
+    const analysis = emptyPayslipAnalysis();
+    analysis.totals = [{ label: "Totale competenze", value: 1900, source: "Analisi AI" }];
+    analysis.items = [{ originalDescription: "Totale competenze", category: "earnings", quantity: null, unit: "euro", ratePct: null, amount: 1900, confidence: "alta", source: "ai" }];
+    const review = initialReview(analysis, "2026-09");
+    expect(review.grossTotal).toBe("1900");
+    expect(review.items).toEqual([]);
+    expect(confirmReviewValues(review)).toMatchObject({ numbers: { grossTotal: 1900 }, items: [] });
+  });
+
+  it("non trasforma Competenze accessorie in lordo se l'AI la etichetta gross", () => {
+    const analysis = emptyPayslipAnalysis();
+    analysis.items = [{ originalDescription: "Competenze accessorie", category: "gross", quantity: null, unit: "euro", ratePct: null, amount: 120, confidence: "alta", source: "ai" }];
+    const review = initialReview(analysis, "2026-09");
+    expect(review.grossTotal).toBe("");
+    expect(review.selected.grossTotal).toBe(false);
+    expect(review.items).toMatchObject([{ originalDescription: "Competenze accessorie", category: "earnings", selected: true }]);
+    expect(confirmReviewValues(review)).toMatchObject({ numbers: { grossTotal: null }, items: [{ originalDescription: "Competenze accessorie", category: "earnings", amount: 120 }] });
+  });
+
   it("non preseleziona totali di trattenute discordanti", () => {
     const analysis = emptyPayslipAnalysis();
     analysis.totals = [

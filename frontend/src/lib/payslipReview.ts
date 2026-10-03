@@ -2,15 +2,17 @@ import type { Confidence, DetectedAllowance, PayslipAnalysis } from "./payslip";
 import { inspectPayslipNumber } from "./payslipNumber";
 import type { PayslipItem } from "./types";
 
-const grossLabel = /\b(?:lordo|totale\s+competenze|competenze)\b/i;
-const netLabel = /\bnetto\b/i;
-const grossOrNetLabel = /\b(?:lordo|competenze|netto)\b/i;
+const grossLabel = /^\s*(?:totale\s+(?:competenze|lordo)|lordo(?:\s+totale)?)\s*:?\s*$/i;
+const netLabel = /^\s*(?:totale\s+netto|netto(?:\s+(?:(?:in\s+)?busta|a\s+pagare))?)\s*:?\s*$/i;
+const isGrossOrNetLabel = (label: string): boolean => grossLabel.test(label) || netLabel.test(label);
 
 export interface ReviewItem extends PayslipItem {
   selected: boolean;
   quantityText: string;
   ratePctText: string;
   amountText: string;
+  decisionTouched?: boolean;
+  valueEdited?: boolean;
 }
 
 export interface ReviewTotal {
@@ -18,6 +20,8 @@ export interface ReviewTotal {
   valueText: string;
   source: string;
   selected: boolean;
+  decisionTouched?: boolean;
+  valueEdited?: boolean;
 }
 
 export interface ReviewState {
@@ -33,7 +37,7 @@ export interface ReviewState {
   allowancesEdited: boolean;
   totalsEdited: boolean;
   itemsEdited: boolean;
-  allowances: Array<DetectedAllowance & { selected: boolean; amountText: string }>;
+  allowances: Array<DetectedAllowance & { selected: boolean; amountText: string; decisionTouched?: boolean; valueEdited?: boolean }>;
   totals: ReviewTotal[];
   items: ReviewItem[];
 }
@@ -44,14 +48,14 @@ function uniqueTotal(analysis: PayslipAnalysis, pattern: RegExp, category: "gros
   if (Object.keys(analysis.extraFields ?? {}).some((key) => key.startsWith("total:") && pattern.test(key.slice(6)))) return null;
   const candidates = [
     ...analysis.totals.filter((item) => pattern.test(item.label)).map((item) => item.value),
-    ...analysis.items.filter((item) => item.category === category && item.amount !== null).map((item) => item.amount as number),
+    ...analysis.items.filter((item) => item.category === category && pattern.test(item.originalDescription) && item.amount !== null).map((item) => item.amount as number),
   ];
   if (!candidates.length || candidates.some((value) => Math.abs(value - candidates[0]) > 0.01)) return null;
   return candidates[0];
 }
 
 function otherReviewTotals(analysis: PayslipAnalysis): ReviewTotal[] {
-  const totals = analysis.totals.filter((item) => !grossOrNetLabel.test(item.label) && !/totale\s+ore/i.test(item.label));
+  const totals = analysis.totals.filter((item) => !isGrossOrNetLabel(item.label) && !/totale\s+ore/i.test(item.label));
   const keyFor = (label: string) => /ritenut|trattenut/i.test(label) ? "trattenute" : label.trim().toLocaleLowerCase("it-IT");
   return totals.map((item, index) => {
     const duplicates = totals.filter((candidate) => keyFor(candidate.label) === keyFor(item.label));
@@ -92,8 +96,9 @@ export function initialReview(analysis: PayslipAnalysis, month: string, configur
     },
     allowances: analysis.allowances.map((allowance) => ({ ...allowance, selected: allowance.confidence !== "bassa", amountText: displayNumber(allowance.amount) })),
     totals: otherReviewTotals(analysis),
-    items: analysis.items.filter((item) => item.category !== "gross" && item.category !== "net" && !grossOrNetLabel.test(item.originalDescription)).map((item) => ({
-      ...item, selected: item.confidence !== "bassa", quantityText: displayNumber(item.quantity), ratePctText: displayNumber(item.ratePct), amountText: displayNumber(item.amount),
+    items: analysis.items.filter((item) => item.category !== "net" && !isGrossOrNetLabel(item.originalDescription)).map((item) => ({
+      ...item, category: item.category === "gross" ? "earnings" as const : item.category,
+      selected: item.confidence !== "bassa", quantityText: displayNumber(item.quantity), ratePctText: displayNumber(item.ratePct), amountText: displayNumber(item.amount),
     })),
   };
 }
@@ -169,10 +174,10 @@ export function confirmReviewValues(review: ReviewState): ConfirmedReviewValues 
     if (!item.name.trim()) throw new Error("Dai un nome all’indennità oppure escludila.");
     return { name: item.name.trim(), amount: optionalNumber(item.amountText, item.name, true) };
   });
-  const totals = review.totals.filter((item) => item.selected && !grossOrNetLabel.test(item.label)).map((item) => ({
+  const totals = review.totals.filter((item) => item.selected && !isGrossOrNetLabel(item.label)).map((item) => ({
     label: item.label.trim(), value: checkedNumber(item.valueText, item.label, true),
   }));
-  const items = review.items.filter((item) => item.selected && item.category !== "gross" && item.category !== "net" && !grossOrNetLabel.test(item.originalDescription)).map((item) => ({
+  const items = review.items.filter((item) => item.selected && item.category !== "gross" && item.category !== "net" && !isGrossOrNetLabel(item.originalDescription)).map((item) => ({
     originalDescription: item.originalDescription.trim(), category: item.category, unit: item.unit,
     quantity: optionalNumber(item.quantityText, `${item.originalDescription}: quantità`),
     ratePct: optionalNumber(item.ratePctText, `${item.originalDescription}: percentuale`),

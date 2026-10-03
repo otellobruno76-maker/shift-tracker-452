@@ -155,8 +155,39 @@ function EditDialog({ record, onClose }: { record: PayslipRecord | null; onClose
       else if (draft[key] !== record[key]) provenance[key] = { source: "manuale", confidence: "alta" };
     }
     const grossOrNet = /\b(?:lordo|totale\s+competenze|netto)\b/i;
+    const reviewDecisions = {
+      fields: { ...(draft.reviewDecisions?.fields ?? {}) },
+      allowances: draft.reviewDecisions?.allowances ?? [],
+      totals: draft.reviewDecisions?.totals ?? [],
+      items: draft.reviewDecisions?.items ?? [],
+    };
+    for (const key of numericFields) {
+      if (parsed[key] === (record[key] ?? null)) continue;
+      reviewDecisions.fields[key] = {
+        value: numberText(parsed[key]), selected: parsed[key] !== null,
+        edited: parsed[key] !== null, selectionTouched: true,
+      };
+    }
+    for (const [key, values, previous] of [
+      ["overtimeTariffs", overtimeTariffs, record.overtimeTariffs ?? []],
+      ["overtimeRates", overtimeRates, record.overtimeRates],
+    ] as const) {
+      if (JSON.stringify(values) === JSON.stringify(previous)) continue;
+      reviewDecisions.fields[key] = {
+        value: values.map(numberText).join("; "), selected: values.length > 0,
+        edited: values.length > 0, selectionTouched: true,
+      };
+    }
+    for (const key of ["month", "payType", "qualification", "contractCode", "ccnl", "level"] as const) {
+      if ((draft[key] ?? "") === (record[key] ?? "")) continue;
+      const value = draft[key] ?? "";
+      reviewDecisions.fields[key] = {
+        value, ...(key === "month" || key === "payType" ? {} : { selected: value !== "" }),
+        edited: value !== "", selectionTouched: true,
+      };
+    }
     const updated: PayslipRecord = {
-      ...draft, ...parsed, overtimeTariffs, overtimeRates, fieldProvenance: provenance,
+      ...draft, ...parsed, overtimeTariffs, overtimeRates, fieldProvenance: provenance, reviewDecisions,
       totals: draft.totals.filter((item) => !grossOrNet.test(item.label)),
       items: draft.items?.filter((item) => item.category !== "gross" && item.category !== "net" && !grossOrNet.test(item.originalDescription)),
       updatedAt: new Date().toISOString(),

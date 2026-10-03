@@ -21,6 +21,7 @@ import { parsePayslipNumber } from "@/lib/payslipNumber";
 import { analyzeStructuredPayslip } from "@/lib/payslipStructured";
 import { mergePayslipAnalyses, requestPayslipAI } from "@/lib/payslipAi";
 import { confirmReviewValues, initialReview, mergeReviewKeepingUserChoices, updateReviewSelection, updateReviewValue, type ReviewState } from "@/lib/payslipReview";
+import { captureReviewDecisions, restoreReviewDecisions, resolveReviewDecisionConflict, type ReviewDecisionConflict } from "@/lib/payslipReviewDecisions";
 import { savePayslip, saveSettings, usePayslips, useSettings } from "@/lib/store";
 import { uid, type PayslipRecord } from "@/lib/types";
 import { getActiveMonth } from "@/lib/activeMonth";
@@ -65,11 +66,18 @@ export default function ConfiguraCedolino() {
   const [aiError, setAiError] = useState("");
   const [timing, setTiming] = useState<{ preparationMs?: number; localMs?: number; requestMs?: number; parseMs?: number; serverTiming?: string | null }>({});
   const [conflicts, setConflicts] = useState<string[]>([]);
+  const [decisionConflicts, setDecisionConflicts] = useState<ReviewDecisionConflict[]>([]);
+  const [preservedFields, setPreservedFields] = useState<string[]>([]);
+
+  const reviewForReplacement = (proposed: ReviewState, current?: ReviewState) => {
+    if (!replaced) return { review: current ? mergeReviewKeepingUserChoices(current, proposed) : proposed, conflicts: [], preservedFields: [] };
+    return restoreReviewDecisions(replaced, proposed, current);
+  };
 
   const analyze = async (file: File) => {
     const attempt = ++run.current;
     setBusy(true); setError(""); setAiError(""); setAnalysis(null); setReview(null);
-    setFilename(file.name); setSelectedFile(null); setConflicts([]); setTiming({});
+    setFilename(file.name); setSelectedFile(null); setConflicts([]); setDecisionConflicts([]); setPreservedFields([]); setTiming({});
     let input: File;
     const started = performance.now();
     try {
@@ -88,12 +96,14 @@ export default function ConfiguraCedolino() {
       const detected = analyzeStructuredPayslip(document);
       if (!mounted.current || attempt !== run.current) return;
       setAnalysis(detected);
-      setReview(initialReview(detected, replaced?.month ?? getActiveMonth(), settings.dailyOrdinaryHours));
+      const restored = reviewForReplacement(initialReview(detected, replaced?.month ?? getActiveMonth(), settings.dailyOrdinaryHours));
+      setReview(restored.review); setDecisionConflicts(restored.conflicts); setPreservedFields(restored.preservedFields);
     } catch (cause) {
       if (!mounted.current || attempt !== run.current) return;
       const detected = emptyPayslipAnalysis();
       setAnalysis(detected);
-      setReview(initialReview(detected, replaced?.month ?? getActiveMonth(), settings.dailyOrdinaryHours));
+      const restored = reviewForReplacement(initialReview(detected, replaced?.month ?? getActiveMonth(), settings.dailyOrdinaryHours));
+      setReview(restored.review); setDecisionConflicts(restored.conflicts); setPreservedFields(restored.preservedFields);
       setError(cause instanceof Error ? cause.message : "Lettura locale non riuscita. Usa l’AI con il tuo consenso o completa i campi mancanti.");
     } finally {
       if (mounted.current && attempt === run.current) { setTiming((previous) => ({ ...previous, localMs: performance.now() - prepared })); setBusy(false); }
@@ -111,7 +121,10 @@ export default function ConfiguraCedolino() {
       const nextReview = initialReview(merged.analysis, merged.month ?? review.month, settings.dailyOrdinaryHours);
       if (merged.payType) nextReview.payType = merged.payType;
       setAnalysis(merged.analysis);
-      setReview((current) => current ? mergeReviewKeepingUserChoices(current, nextReview) : nextReview);
+      const restored = reviewForReplacement(nextReview, review);
+      setReview(restored.review);
+      setDecisionConflicts(restored.conflicts);
+      setPreservedFields(restored.preservedFields);
       setConflicts(merged.conflicts);
       toast.success("Analisi AI completata. Controlla tutti i valori prima di salvare.");
     } catch (cause) {
@@ -124,6 +137,10 @@ export default function ConfiguraCedolino() {
 
   const confirm = async () => {
     if (!review || !analysis || savingRecord) return;
+    if (decisionConflicts.length) {
+      toast.error("Risolvi le voci incompatibili prima di salvare il cedolino.");
+      return;
+    }
     const detectedAnalysis = analysis;
     const chosen = review.selected;
     let confirmed: ReturnType<typeof confirmReviewValues>;
@@ -182,13 +199,19 @@ export default function ConfiguraCedolino() {
       level: chosen.level ? review.level.trim() : "",
       totals: confirmed.totals,
       items: confirmed.items,
-      fieldProvenance: Object.fromEntries(Object.entries(review.selected).filter(([, selected]) => selected).map(([key]) => [key, {
-        source: review.edited[key] ? "manuale" : detectedAnalysis[key as keyof PayslipAnalysis] && typeof detectedAnalysis[key as keyof PayslipAnalysis] === "object" && "source" in (detectedAnalysis[key as keyof PayslipAnalysis] as object) && String((detectedAnalysis[key as keyof PayslipAnalysis] as { source?: string }).source).startsWith("Analisi AI") ? "ai" : "locale",
-        confidence: "media",
-      }])),
+      fieldProvenance: {},
+      reviewDecisions: captureReviewDecisions(review),
       uploadedAt: replaced?.uploadedAt ?? now,
       updatedAt: now,
     };
+    record.fieldProvenance = Object.fromEntries(Object.entries(review.selected).filter(([, selected]) => selected).map(([key]) => {
+      const prior = replaced?.fieldProvenance?.[key];
+      const sameSavedValue = replaced && JSON.stringify(record[key as keyof PayslipRecord]) === JSON.stringify(replaced[key as keyof PayslipRecord]);
+      return [key, sameSavedValue && prior ? prior : {
+        source: review.edited[key] ? "manuale" : detectedAnalysis[key as keyof PayslipAnalysis] && typeof detectedAnalysis[key as keyof PayslipAnalysis] === "object" && "source" in (detectedAnalysis[key as keyof PayslipAnalysis] as object) && String((detectedAnalysis[key as keyof PayslipAnalysis] as { source?: string }).source).startsWith("Analisi AI") ? "ai" : "locale",
+        confidence: "media",
+      }];
+    }));
     setSavingRecord(true);
     try {
       await savePayslip(record, replacedAtOpen.current);
@@ -284,7 +307,7 @@ export default function ConfiguraCedolino() {
               <p className="mt-1">{error}</p>
             </div>
           )}
-          {!busy && <Button variant="outline" className="mt-3 h-12 w-full" data-testid="btn-manual-payslip" onClick={() => { const detected = emptyPayslipAnalysis(); setFilename("Inserimento manuale"); setAnalysis(detected); setReview(initialReview(detected, replaced?.month ?? new Date().toISOString().slice(0, 7), settings.dailyOrdinaryHours)); }}>Compila senza caricare un documento</Button>}
+          {!busy && <Button variant="outline" className="mt-3 h-12 w-full" data-testid="btn-manual-payslip" onClick={() => { const detected = emptyPayslipAnalysis(); const restored = reviewForReplacement(initialReview(detected, replaced?.month ?? new Date().toISOString().slice(0, 7), settings.dailyOrdinaryHours)); setFilename("Inserimento manuale"); setAnalysis(detected); setReview(restored.review); setDecisionConflicts(restored.conflicts); setPreservedFields(restored.preservedFields); }}>Compila senza caricare un documento</Button>}
         </section>
       )}
 
@@ -300,11 +323,29 @@ export default function ConfiguraCedolino() {
         <details className="mt-2 text-sm"><summary>Tempi di lettura</summary><p>Preparazione: {((timing.preparationMs ?? 0) / 1000).toFixed(1)} s · Lettura locale: {((timing.localMs ?? 0) / 1000).toFixed(1)} s</p>{timing.requestMs !== undefined && <p>Richiesta AI: {(timing.requestMs / 1000).toFixed(1)} s · Risultato: {((timing.parseMs ?? 0) / 1000).toFixed(2)} s</p>}</details>
         <fieldset disabled={aiBusy}>
         {conflicts.length > 0 && <section className="mt-4 rounded-2xl border border-[#F59E0B] bg-[#FFFBEB] p-4"><h2 className="font-extrabold text-[#92400E]">Valori da verificare</h2><p className="mt-1 text-sm text-[#92400E]">La lettura locale e l’AI non concordano. Non abbiamo scelto automaticamente.</p><ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-[#78350F]">{conflicts.map((item) => <li key={item}>{item}</li>)}</ul></section>}
+        {decisionConflicts.length > 0 && <section className="mt-4 rounded-2xl border border-[#F59E0B] bg-[#FFFBEB] p-4" data-testid="payslip-decision-conflicts">
+          <h2 className="font-extrabold text-[#92400E]">Decisioni da confermare</h2>
+          <p className="mt-1 text-sm text-[#92400E]">Alcune voci del cedolino salvato non corrispondono con certezza al nuovo documento. Scegli per ciascuna prima di salvare.</p>
+          <div className="mt-3 space-y-3">{decisionConflicts.map((conflict) => <div key={conflict.id} className="rounded-xl border border-[#FCD34D] bg-white p-3">
+            <p className="text-sm font-bold">{conflict.label}</p>
+            <p className="mt-1 text-xs text-[#78350F]">{conflict.reason === "missing" ? "Voce non trovata nella nuova analisi." : conflict.reason === "different" ? "Il mese rilevato nel nuovo documento è diverso da quello salvato." : "Più voci possibili nella nuova analisi."}</p>
+            <p className="mt-1 text-xs text-[#78350F]">Valore salvato: {conflict.previousValue || "non indicato"}{conflict.proposedValues.length > 0 ? ` · Nuovi valori: ${conflict.proposedValues.join(", ")}` : ""}</p>
+            <div className="mt-2 flex flex-wrap gap-2">
+              <Button variant="outline" className="h-10" onClick={() => { setReview((current) => current ? resolveReviewDecisionConflict(current, conflict, "keep") : current); setDecisionConflicts((current) => current.filter((item) => item.id !== conflict.id)); }}>Mantieni scelta salvata</Button>
+              <Button variant="outline" className="h-10" onClick={() => { setReview((current) => current ? resolveReviewDecisionConflict(current, conflict, "new") : current); setDecisionConflicts((current) => current.filter((item) => item.id !== conflict.id)); }}>Usa nuova analisi</Button>
+            </div>
+          </div>)}</div>
+        </section>}
         <Review
           analysis={analysis}
           review={review}
           filename={filename}
-          onChange={setReview}
+          preservedFields={preservedFields}
+          previousProvenance={replaced?.fieldProvenance}
+          onChange={(next) => {
+            setPreservedFields((fields) => fields.filter((key) => next[key as keyof ReviewState] === review[key as keyof ReviewState]));
+            setReview(next);
+          }}
           onCancel={() => navigate("/impostazioni")}
           onReplace={() => {
             setAnalysis(null);
@@ -312,9 +353,12 @@ export default function ConfiguraCedolino() {
             setError("");
             setSelectedFile(null);
             setConflicts([]);
+            setDecisionConflicts([]);
+            setPreservedFields([]);
           }}
           onConfirm={confirm}
           saving={savingRecord}
+          unresolved={decisionConflicts.length > 0}
         />
         </fieldset>
         </>
@@ -351,23 +395,32 @@ function Review({
   analysis,
   review,
   filename,
+  preservedFields,
+  previousProvenance,
   onChange,
   onCancel,
   onReplace,
   onConfirm,
   saving,
+  unresolved,
 }: {
   analysis: PayslipAnalysis;
   review: ReviewState;
   filename: string;
+  preservedFields: string[];
+  previousProvenance?: PayslipRecord["fieldProvenance"];
   onChange: (state: ReviewState) => void;
   onCancel: () => void;
   onReplace: () => void;
   onConfirm: () => void;
   saving: boolean;
+  unresolved: boolean;
 }) {
   const updateValue = (key: "qualification" | "contractCode" | "partTimePct" | "basePay" | "dailyPay" | "monthlyPay" | "ordinaryHours" | "dailyOrdinaryHours" | "workedHours" | "workedDays" | "totalElementsPay" | "grossTotal" | "netTotal" | "overtimeHours" | "overtimeTariffs" | "overtimeRates" | "nightPct" | "holidayPct" | "ccnl" | "level", value: string) => onChange(updateReviewValue(review, key, value));
   const updateSelected = (key: string, value: boolean) => onChange(updateReviewSelection(review, key, value));
+  const sourceFor = (key: string, detectedSource: string) => preservedFields.includes(key)
+    ? `Scelta salvata nel cedolino precedente${previousProvenance?.[key]?.source === "manuale" ? " · correzione manuale" : ""}`
+    : review.edited[key] ? "Correzione in questa revisione" : detectedSource;
   const sourceForRates = analysis.overtimeRates.length
     ? analysis.overtimeRates.map((rate) => rate.source).join(" · ")
     : "Non rilevata";
@@ -379,7 +432,7 @@ function Review({
     const uncertain = Object.entries(analysis.extraFields ?? {}).filter(([key]) => key.startsWith("total:") && pattern.test(key.slice(6))).map(([, value]) => value.source);
     const candidates = [
       ...analysis.totals.filter((item) => pattern.test(item.label)),
-      ...analysis.items.filter((item) => item.category === category && item.amount !== null).map((item) => ({
+      ...analysis.items.filter((item) => item.category === category && pattern.test(item.originalDescription) && item.amount !== null).map((item) => ({
         label: item.originalDescription, value: item.amount as number, source: `Voce ${item.source}: ${item.note ?? item.originalDescription}`,
       })),
     ];
@@ -391,8 +444,8 @@ function Review({
       confidence: conflicting ? "bassa" as const : candidates.length ? "alta" as const : "bassa" as const,
     };
   };
-  const grossEvidence = totalEvidence(/lordo|competenze/i, "gross");
-  const netEvidence = totalEvidence(/netto/i, "net");
+  const grossEvidence = totalEvidence(/^\s*(?:totale\s+(?:competenze|lordo)|lordo(?:\s+totale)?)\s*:?\s*$/i, "gross");
+  const netEvidence = totalEvidence(/^\s*(?:totale\s+netto|netto(?:\s+(?:(?:in\s+)?busta|a\s+pagare))?)\s*:?\s*$/i, "net");
 
   return (
     <div className="mt-4 space-y-4" data-testid="payslip-review">
@@ -409,27 +462,27 @@ function Review({
         <div className="mt-3"><Label htmlFor="pay-type" className="font-extrabold">Tipo di retribuzione</Label><select id="pay-type" className="mt-1 h-12 w-full rounded-md border border-input bg-white px-3 text-base" value={review.payType} onChange={(event) => onChange(updateReviewValue(review, "payType", event.target.value as ReviewState["payType"]))}><option value="">Non specificato</option><option value="oraria">Oraria</option><option value="giornaliera">Giornaliera</option><option value="mensile">Mensile</option></select></div>
       </section>
 
-      <ReviewField label="Qualifica" value={review.qualification} checked={review.selected.qualification} source={analysis.qualification.source} confidence={analysis.qualification.confidence} onValue={(value) => updateValue("qualification", value)} onChecked={(value) => updateSelected("qualification", value)} />
-      <ReviewField label="Codice contratto" value={review.contractCode} checked={review.selected.contractCode} source={analysis.contractCode.source} confidence={analysis.contractCode.confidence} onValue={(value) => updateValue("contractCode", value)} onChecked={(value) => updateSelected("contractCode", value)} />
-      <ReviewField label="Part-time" suffix="%" value={review.partTimePct} checked={review.selected.partTimePct} source={analysis.partTimePct.source} confidence={analysis.partTimePct.confidence} onValue={(value) => updateValue("partTimePct", value)} onChecked={(value) => updateSelected("partTimePct", value)} />
-      <ReviewField label="Paga oraria di riferimento" suffix="€/h" value={review.basePay} checked={review.selected.basePay} source={analysis.basePay.source} confidence={analysis.basePay.confidence} onValue={(value) => updateValue("basePay", value)} onChecked={(value) => updateSelected("basePay", value)} />
-      <ReviewField label="Retribuzione giornaliera" suffix="€/giorno" value={review.dailyPay} checked={review.selected.dailyPay} source={analysis.dailyPay.source} confidence={analysis.dailyPay.confidence} onValue={(value) => updateValue("dailyPay", value)} onChecked={(value) => updateSelected("dailyPay", value)} />
-      <ReviewField label="Retribuzione mensile" suffix="€/mese" value={review.monthlyPay} checked={review.selected.monthlyPay} source={analysis.monthlyPay.source} confidence={analysis.monthlyPay.confidence} onValue={(value) => updateValue("monthlyPay", value)} onChecked={(value) => updateSelected("monthlyPay", value)} />
-      <ReviewField label="Ore ordinarie indicate" suffix="ore" value={review.ordinaryHours} checked={review.selected.ordinaryHours} source={analysis.ordinaryHours.source} confidence={analysis.ordinaryHours.confidence} onValue={(value) => updateValue("ordinaryHours", value)} onChecked={(value) => updateSelected("ordinaryHours", value)} />
-      <ReviewField label="Ore ordinarie giornaliere" suffix="ore/giorno" value={review.dailyOrdinaryHours} checked={review.selected.dailyOrdinaryHours} source="Valore proposto dalle Impostazioni" confidence="media" onValue={(value) => updateValue("dailyOrdinaryHours", value)} onChecked={(value) => updateSelected("dailyOrdinaryHours", value)} />
+      <ReviewField label="Qualifica" value={review.qualification} checked={review.selected.qualification} source={sourceFor("qualification", analysis.qualification.source)} confidence={analysis.qualification.confidence} onValue={(value) => updateValue("qualification", value)} onChecked={(value) => updateSelected("qualification", value)} />
+      <ReviewField label="Codice contratto" value={review.contractCode} checked={review.selected.contractCode} source={sourceFor("contractCode", analysis.contractCode.source)} confidence={analysis.contractCode.confidence} onValue={(value) => updateValue("contractCode", value)} onChecked={(value) => updateSelected("contractCode", value)} />
+      <ReviewField label="Part-time" suffix="%" value={review.partTimePct} checked={review.selected.partTimePct} source={sourceFor("partTimePct", analysis.partTimePct.source)} confidence={analysis.partTimePct.confidence} onValue={(value) => updateValue("partTimePct", value)} onChecked={(value) => updateSelected("partTimePct", value)} />
+      <ReviewField label="Paga oraria di riferimento" suffix="€/h" value={review.basePay} checked={review.selected.basePay} source={sourceFor("basePay", analysis.basePay.source)} confidence={analysis.basePay.confidence} onValue={(value) => updateValue("basePay", value)} onChecked={(value) => updateSelected("basePay", value)} />
+      <ReviewField label="Retribuzione giornaliera" suffix="€/giorno" value={review.dailyPay} checked={review.selected.dailyPay} source={sourceFor("dailyPay", analysis.dailyPay.source)} confidence={analysis.dailyPay.confidence} onValue={(value) => updateValue("dailyPay", value)} onChecked={(value) => updateSelected("dailyPay", value)} />
+      <ReviewField label="Retribuzione mensile" suffix="€/mese" value={review.monthlyPay} checked={review.selected.monthlyPay} source={sourceFor("monthlyPay", analysis.monthlyPay.source)} confidence={analysis.monthlyPay.confidence} onValue={(value) => updateValue("monthlyPay", value)} onChecked={(value) => updateSelected("monthlyPay", value)} />
+      <ReviewField label="Ore ordinarie indicate" suffix="ore" value={review.ordinaryHours} checked={review.selected.ordinaryHours} source={sourceFor("ordinaryHours", analysis.ordinaryHours.source)} confidence={analysis.ordinaryHours.confidence} onValue={(value) => updateValue("ordinaryHours", value)} onChecked={(value) => updateSelected("ordinaryHours", value)} />
+      <ReviewField label="Ore ordinarie giornaliere" suffix="ore/giorno" value={review.dailyOrdinaryHours} checked={review.selected.dailyOrdinaryHours} source={sourceFor("dailyOrdinaryHours", "Valore proposto dalle Impostazioni")} confidence="media" onValue={(value) => updateValue("dailyOrdinaryHours", value)} onChecked={(value) => updateSelected("dailyOrdinaryHours", value)} />
       {estimatedDaily !== null && <section className="rounded-2xl border border-dashed border-[#93C5FD] bg-[#EFF6FF] p-4"><p className="text-sm font-bold text-[#1E40AF]">Valore giornaliero stimato</p><p className="mt-1 text-xl font-extrabold text-[#1E3A8A]">{estimatedDaily.toLocaleString("it-IT", { minimumFractionDigits: 2 })} €</p><p className="mt-1 text-xs text-[#1D4ED8]">Calcolato: paga oraria × ore ordinarie giornaliere. Non è un dato letto dal cedolino.</p></section>}
-      <ReviewField label="Ore lavorate" suffix="ore" value={review.workedHours} checked={review.selected.workedHours} source={analysis.workedHours.source} confidence={analysis.workedHours.confidence} onValue={(value) => updateValue("workedHours", value)} onChecked={(value) => updateSelected("workedHours", value)} />
-      <ReviewField label="Giorni lavorati" suffix="giorni" value={review.workedDays} checked={review.selected.workedDays} source={analysis.workedDays.source} confidence={analysis.workedDays.confidence} onValue={(value) => updateValue("workedDays", value)} onChecked={(value) => updateSelected("workedDays", value)} />
-      <ReviewField label="Totale elementi retributivi" suffix="€" value={review.totalElementsPay} checked={review.selected.totalElementsPay} source={analysis.totalElementsPay.source} confidence={analysis.totalElementsPay.confidence} onValue={(value) => updateValue("totalElementsPay", value)} onChecked={(value) => updateSelected("totalElementsPay", value)} />
-      <ReviewField label="Lordo / totale competenze" suffix="€" value={review.grossTotal} checked={review.selected.grossTotal} source={grossEvidence.source} confidence={grossEvidence.confidence} onValue={(value) => updateValue("grossTotal", value)} onChecked={(value) => updateSelected("grossTotal", value)} />
-      <ReviewField label="Netto a pagare" suffix="€" value={review.netTotal} checked={review.selected.netTotal} source={netEvidence.source} confidence={netEvidence.confidence} onValue={(value) => updateValue("netTotal", value)} onChecked={(value) => updateSelected("netTotal", value)} />
-      <ReviewField label="Ore straordinarie indicate" suffix="ore" value={review.overtimeHours} checked={review.selected.overtimeHours} source={analysis.overtimeHours.source} confidence={analysis.overtimeHours.confidence} onValue={(value) => updateValue("overtimeHours", value)} onChecked={(value) => updateSelected("overtimeHours", value)} />
-      <ReviewField label="Tariffe straordinarie" suffix="€/h" value={review.overtimeTariffs} checked={review.selected.overtimeTariffs} source={analysis.overtimeTariffs.map((item) => item.source).join(" · ") || "Non rilevata"} confidence={analysis.overtimeTariffs[0]?.confidence ?? "bassa"} onValue={(value) => updateValue("overtimeTariffs", value)} onChecked={(value) => updateSelected("overtimeTariffs", value)} />
-      <ReviewField label="Maggiorazioni straordinario" suffix="%" value={review.overtimeRates} checked={review.selected.overtimeRates} source={sourceForRates} confidence={rateConfidence} placeholder="Es. 15; 20; 25" onValue={(value) => updateValue("overtimeRates", value)} onChecked={(value) => updateSelected("overtimeRates", value)} />
-      <ReviewField label="Maggiorazione notturna" suffix="%" value={review.nightPct} checked={review.selected.nightPct} source={analysis.nightPct.source} confidence={analysis.nightPct.confidence} onValue={(value) => updateValue("nightPct", value)} onChecked={(value) => updateSelected("nightPct", value)} />
-      <ReviewField label="Maggiorazione festiva" suffix="%" value={review.holidayPct} checked={review.selected.holidayPct} source={analysis.holidayPct.source} confidence={analysis.holidayPct.confidence} onValue={(value) => updateValue("holidayPct", value)} onChecked={(value) => updateSelected("holidayPct", value)} />
-      <ReviewField label="CCNL" value={review.ccnl} checked={review.selected.ccnl} source={analysis.ccnl.source} confidence={analysis.ccnl.confidence} onValue={(value) => updateValue("ccnl", value)} onChecked={(value) => updateSelected("ccnl", value)} />
-      <ReviewField label="Livello" value={review.level} checked={review.selected.level} source={analysis.level.source} confidence={analysis.level.confidence} onValue={(value) => updateValue("level", value)} onChecked={(value) => updateSelected("level", value)} />
+      <ReviewField label="Ore lavorate" suffix="ore" value={review.workedHours} checked={review.selected.workedHours} source={sourceFor("workedHours", analysis.workedHours.source)} confidence={analysis.workedHours.confidence} onValue={(value) => updateValue("workedHours", value)} onChecked={(value) => updateSelected("workedHours", value)} />
+      <ReviewField label="Giorni lavorati" suffix="giorni" value={review.workedDays} checked={review.selected.workedDays} source={sourceFor("workedDays", analysis.workedDays.source)} confidence={analysis.workedDays.confidence} onValue={(value) => updateValue("workedDays", value)} onChecked={(value) => updateSelected("workedDays", value)} />
+      <ReviewField label="Totale elementi retributivi" suffix="€" value={review.totalElementsPay} checked={review.selected.totalElementsPay} source={sourceFor("totalElementsPay", analysis.totalElementsPay.source)} confidence={analysis.totalElementsPay.confidence} onValue={(value) => updateValue("totalElementsPay", value)} onChecked={(value) => updateSelected("totalElementsPay", value)} />
+      <ReviewField label="Lordo / totale competenze" suffix="€" value={review.grossTotal} checked={review.selected.grossTotal} source={sourceFor("grossTotal", grossEvidence.source)} confidence={grossEvidence.confidence} onValue={(value) => updateValue("grossTotal", value)} onChecked={(value) => updateSelected("grossTotal", value)} />
+      <ReviewField label="Netto a pagare" suffix="€" value={review.netTotal} checked={review.selected.netTotal} source={sourceFor("netTotal", netEvidence.source)} confidence={netEvidence.confidence} onValue={(value) => updateValue("netTotal", value)} onChecked={(value) => updateSelected("netTotal", value)} />
+      <ReviewField label="Ore straordinarie indicate" suffix="ore" value={review.overtimeHours} checked={review.selected.overtimeHours} source={sourceFor("overtimeHours", analysis.overtimeHours.source)} confidence={analysis.overtimeHours.confidence} onValue={(value) => updateValue("overtimeHours", value)} onChecked={(value) => updateSelected("overtimeHours", value)} />
+      <ReviewField label="Tariffe straordinarie" suffix="€/h" value={review.overtimeTariffs} checked={review.selected.overtimeTariffs} source={sourceFor("overtimeTariffs", analysis.overtimeTariffs.map((item) => item.source).join(" · ") || "Non rilevata")} confidence={analysis.overtimeTariffs[0]?.confidence ?? "bassa"} onValue={(value) => updateValue("overtimeTariffs", value)} onChecked={(value) => updateSelected("overtimeTariffs", value)} />
+      <ReviewField label="Maggiorazioni straordinario" suffix="%" value={review.overtimeRates} checked={review.selected.overtimeRates} source={sourceFor("overtimeRates", sourceForRates)} confidence={rateConfidence} placeholder="Es. 15; 20; 25" onValue={(value) => updateValue("overtimeRates", value)} onChecked={(value) => updateSelected("overtimeRates", value)} />
+      <ReviewField label="Maggiorazione notturna" suffix="%" value={review.nightPct} checked={review.selected.nightPct} source={sourceFor("nightPct", analysis.nightPct.source)} confidence={analysis.nightPct.confidence} onValue={(value) => updateValue("nightPct", value)} onChecked={(value) => updateSelected("nightPct", value)} />
+      <ReviewField label="Maggiorazione festiva" suffix="%" value={review.holidayPct} checked={review.selected.holidayPct} source={sourceFor("holidayPct", analysis.holidayPct.source)} confidence={analysis.holidayPct.confidence} onValue={(value) => updateValue("holidayPct", value)} onChecked={(value) => updateSelected("holidayPct", value)} />
+      <ReviewField label="CCNL" value={review.ccnl} checked={review.selected.ccnl} source={sourceFor("ccnl", analysis.ccnl.source)} confidence={analysis.ccnl.confidence} onValue={(value) => updateValue("ccnl", value)} onChecked={(value) => updateSelected("ccnl", value)} />
+      <ReviewField label="Livello" value={review.level} checked={review.selected.level} source={sourceFor("level", analysis.level.source)} confidence={analysis.level.confidence} onValue={(value) => updateValue("level", value)} onChecked={(value) => updateSelected("level", value)} />
 
       <section className="rounded-2xl border border-[#E2E5EA] bg-white p-4 shadow-sm">
         <h2 className="font-extrabold">Indennità riconoscibili</h2>
@@ -442,10 +495,10 @@ function Review({
                 <span className="flex items-center gap-2">
                   <Checkbox checked={allowance.selected} onCheckedChange={(checked) => {
                     const items = [...review.allowances];
-                    items[index] = { ...allowance, selected: checked === true };
+                    items[index] = { ...allowance, selected: checked === true, decisionTouched: true };
                     onChange({ ...review, allowances: items, allowancesEdited: true });
                   }} />
-                  <Input className="h-10" placeholder="Nome indennità" value={allowance.name} onChange={(event) => { const items = [...review.allowances]; items[index] = { ...allowance, name: event.target.value, source: "Inserimento manuale" }; onChange({ ...review, allowances: items, allowancesEdited: true }); }} />
+                  <Input className="h-10" placeholder="Nome indennità" value={allowance.name} onChange={(event) => { const items = [...review.allowances]; items[index] = { ...allowance, name: event.target.value, source: "Inserimento manuale", valueEdited: true }; onChange({ ...review, allowances: items, allowancesEdited: true }); }} />
                 </span>
                 <Input
                   className="mt-2 h-11"
@@ -454,7 +507,7 @@ function Review({
                   value={allowance.amountText}
                   onChange={(event) => {
                     const items = [...review.allowances];
-                    items[index] = { ...allowance, amountText: event.target.value, source: "Inserimento manuale" };
+                    items[index] = { ...allowance, amountText: event.target.value, source: "Inserimento manuale", valueEdited: true };
                     onChange({ ...review, allowances: items, allowancesEdited: true });
                   }}
                 />
@@ -463,7 +516,7 @@ function Review({
             ))}
           </div>
         )}
-        <Button variant="outline" className="mt-3 h-11 w-full" onClick={() => onChange({ ...review, allowances: [...review.allowances, { name: "", amount: null, amountText: "", source: "Inserimento manuale", confidence: "bassa", selected: true }], allowancesEdited: true })}>Aggiungi indennità</Button>
+        <Button variant="outline" className="mt-3 h-11 w-full" onClick={() => onChange({ ...review, allowances: [...review.allowances, { name: "", amount: null, amountText: "", source: "Inserimento manuale", confidence: "bassa", selected: true, valueEdited: true }], allowancesEdited: true })}>Aggiungi indennità</Button>
       </section>
 
       <section className="rounded-2xl border border-[#E2E5EA] bg-white p-4 shadow-sm">
@@ -472,11 +525,11 @@ function Review({
         {review.totals.length === 0 ? <p className="mt-2 text-sm text-[#64748B]">Non rilevati</p> : <div className="mt-2 space-y-3">{review.totals.map((total, index) => (
           <div key={index} className="rounded-xl bg-[#F8FAFC] p-3">
             <div className="flex items-center gap-2"><Checkbox aria-label={`Usa totale ${total.label}`} checked={total.selected} onCheckedChange={(checked) => {
-              const totals = [...review.totals]; totals[index] = { ...total, selected: checked === true };
+              const totals = [...review.totals]; totals[index] = { ...total, selected: checked === true, decisionTouched: true };
               onChange({ ...review, totals, totalsEdited: true });
             }} /><span className="text-sm font-bold">{total.label}</span></div>
             <Input aria-label={`Importo ${total.label}`} inputMode="decimal" className="mt-2 h-10" value={total.valueText} onChange={(event) => {
-              const totals = [...review.totals]; totals[index] = { ...total, valueText: event.target.value, selected: event.target.value.trim() !== "", source: "Correzione manuale" };
+              const totals = [...review.totals]; totals[index] = { ...total, valueText: event.target.value, selected: event.target.value.trim() !== "", source: "Correzione manuale", valueEdited: true };
               onChange({ ...review, totals, totalsEdited: true });
             }} />
             <p className="mt-1 text-xs text-[#64748B]">Provenienza: {total.source}</p>
@@ -491,7 +544,7 @@ function Review({
           const changeItem = (patch: Partial<typeof item>) => {
             const items = [...review.items];
             const corrected = !Object.hasOwn(patch, "selected");
-            items[index] = { ...item, ...patch, ...(corrected ? { selected: true, source: "manuale" as const, confidence: "media" as const } : {}) };
+            items[index] = { ...item, ...patch, ...(corrected ? { selected: true, source: "manuale" as const, confidence: "media" as const, valueEdited: true } : { decisionTouched: true }) };
             onChange({ ...review, items, itemsEdited: true });
           };
           return <div key={index} className="rounded-xl bg-[#F8FAFC] p-3">
@@ -513,7 +566,7 @@ function Review({
       </section>
 
       <div className="space-y-2">
-        <Button className="h-14 w-full text-base font-extrabold" data-testid="btn-apply-payslip" disabled={saving} onClick={onConfirm}>Salva cedolino</Button>
+        <Button className="h-14 w-full text-base font-extrabold" data-testid="btn-apply-payslip" disabled={saving || unresolved} onClick={onConfirm}>Salva cedolino</Button>
         <Button variant="outline" className="h-12 w-full" onClick={onReplace}>Scegli un altro documento</Button>
         <Button variant="ghost" className="h-12 w-full" data-testid="btn-cancel-payslip" onClick={onCancel}>Annulla senza modificare</Button>
       </div>
@@ -534,6 +587,7 @@ function ReviewField({ label, suffix, value, checked, source, confidence, placeh
   onChecked: (value: boolean) => void;
 }) {
   const detected = source !== "Non rilevata";
+  const fromSavedReview = source.startsWith("Scelta salvata nel cedolino precedente") || source === "Correzione in questa revisione";
   return (
     <section className="rounded-2xl border border-[#E2E5EA] bg-white p-4 shadow-sm">
       <div className="flex items-start gap-3">
@@ -541,7 +595,7 @@ function ReviewField({ label, suffix, value, checked, source, confidence, placeh
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <Label className="font-extrabold">{label}</Label>
-            {detected && <span className={`rounded-full px-2 py-0.5 text-[11px] font-bold ${confidenceStyle[confidence]}`}>Affidabilità {confidence}</span>}
+            {detected && !fromSavedReview && <span className={`rounded-full px-2 py-0.5 text-[11px] font-bold ${confidenceStyle[confidence]}`}>Affidabilità {confidence}</span>}
           </div>
           <div className="mt-2 flex items-center gap-2">
             <Input aria-label={label} value={value} placeholder={placeholder ?? (detected ? "" : "Non rilevata")} className="h-11" onChange={(event) => onValue(event.target.value)} />
