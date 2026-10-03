@@ -5,10 +5,12 @@ import asyncio
 import httpx
 import pytest
 from fastapi import FastAPI
+from starlette import formparsers
 from starlette.middleware.cors import CORSMiddleware
 
 from lib import payslip_ai
 from lib.ai_protection import AIProtectionConfig, install_ai_protection
+from payslip_server import app as payslip_app
 
 
 def protected_app(monkeypatch, **settings):
@@ -48,6 +50,15 @@ def multipart(data, boundary=b"test-boundary"):
         b"Content-Type: application/pdf\r\n\r\n"
         + data + b"\r\n--" + boundary + b"--\r\n"
     )
+
+
+def upload_scope():
+    return {
+        "type": "http", "http_version": "1.1", "method": "POST", "path": "/api/analyze-payslip-ai",
+        "raw_path": b"/api/analyze-payslip-ai", "root_path": "", "scheme": "http", "query_string": b"",
+        "headers": [(b"content-type", b"multipart/form-data; boundary=test-boundary")],
+        "client": ("198.51.100.4", 1234), "server": ("test", 80),
+    }
 
 
 async def chunks(data):
@@ -130,16 +141,96 @@ async def test_streaming_over_cap_returns_413_and_releases_slot(monkeypatch, hea
 
 
 @pytest.mark.asyncio
+async def test_stalled_upload_times_out_closes_file_and_releases_slot(monkeypatch):
+    calls = install_fake_ai(monkeypatch)
+    app = protected_app(monkeypatch, AI_UPLOAD_TIMEOUT_SECONDS=1, AI_MAX_CONCURRENT_ANALYSES=1)
+    opened_files = []
+    original_spooled_file = formparsers.SpooledTemporaryFile
+
+    def tracked_spooled_file(*args, **kwargs):
+        file = original_spooled_file(*args, **kwargs)
+        opened_files.append(file)
+        return file
+
+    monkeypatch.setattr(formparsers, "SpooledTemporaryFile", tracked_spooled_file)
+    body = multipart(b"%PDF-partial")
+    partial_body = body[:body.index(b"%PDF-partial") + len(b"%PDF-partial")]
+    received = 0
+
+    async def receive():
+        nonlocal received
+        received += 1
+        if received == 1:
+            return {"type": "http.request", "body": partial_body, "more_body": True}
+        await asyncio.Event().wait()
+
+    messages = []
+
+    async def send(message):
+        messages.append(message)
+
+    await asyncio.wait_for(app(upload_scope(), receive, send), 5)
+    assert messages[0]["status"] == 408
+    assert b'"code":"UPLOAD_TIMEOUT"' in messages[1]["body"]
+    assert received == 2
+    assert opened_files and all(file.closed for file in opened_files)
+    assert app.state.ai_protection._active == 0
+    assert calls == []
+
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        followup = await client.post("/api/analyze-payslip-ai", files=pdf())
+    assert followup.status_code == 200
+    assert len(calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_trickle_upload_has_total_deadline_not_per_chunk_idle_timeout(monkeypatch):
+    calls = install_fake_ai(monkeypatch)
+    app = protected_app(monkeypatch, AI_UPLOAD_TIMEOUT_SECONDS=1, AI_MAX_CONCURRENT_ANALYSES=1)
+    chunks_sent = 0
+    body = multipart(b"%PDF-partial")
+    partial_body = body[:body.index(b"%PDF-partial") + len(b"%PDF-partial")]
+
+    async def receive():
+        nonlocal chunks_sent
+        if chunks_sent:
+            await asyncio.sleep(0.1)
+        chunks_sent += 1
+        return {"type": "http.request", "body": partial_body if chunks_sent == 1 else b"x", "more_body": True}
+
+    messages = []
+
+    async def send(message):
+        messages.append(message)
+
+    await asyncio.wait_for(app(upload_scope(), receive, send), 5)
+    assert messages[0]["status"] == 408
+    assert b'"code":"UPLOAD_TIMEOUT"' in messages[1]["body"]
+    assert 2 <= chunks_sent < 20
+    assert app.state.ai_protection._active == 0
+    assert calls == []
+
+
+@pytest.mark.parametrize("value", ["0", "-1", "nan", "inf", "-inf"])
+def test_upload_timeout_requires_positive_finite_value(monkeypatch, value):
+    monkeypatch.setenv("AI_UPLOAD_TIMEOUT_SECONDS", value)
+    with pytest.raises(ValueError, match="AI_UPLOAD_TIMEOUT_SECONDS"):
+        AIProtectionConfig.from_env()
+
+
+@pytest.mark.asyncio
 async def test_rate_limit_is_429_and_skips_openai(monkeypatch):
     calls = install_fake_ai(monkeypatch)
-    app = protected_app(monkeypatch, AI_RATE_LIMIT_REQUESTS=1)
+    app = protected_app(monkeypatch, AI_RATE_LIMIT_REQUESTS=1, AI_RATE_LIMIT_WINDOW_SECONDS=47)
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
         first = await client.post("/api/analyze-payslip-ai", files=pdf())
         second = await client.post("/api/analyze-payslip-ai", files=pdf())
     assert first.status_code == 200
     assert second.status_code == 429
-    assert second.json()["detail"]["code"] == "AI_RATE_LIMITED"
-    assert int(second.headers["Retry-After"]) > 0
+    assert second.json()["detail"] == {
+        "code": "AI_RATE_LIMIT", "message": "Troppe richieste. Riprova tra poco.",
+    }
+    assert 1 <= int(second.headers["Retry-After"]) <= 47
     assert len(calls) == 1
 
 
@@ -216,13 +307,30 @@ async def test_busy_request_is_rejected_before_reading_multipart(monkeypatch):
 @pytest.mark.asyncio
 async def test_daily_process_cap_prevents_additional_openai_call(monkeypatch):
     calls = install_fake_ai(monkeypatch)
-    app = protected_app(monkeypatch, AI_DAILY_ANALYSIS_LIMIT=1)
+    app = protected_app(monkeypatch, AI_DAILY_ANALYSIS_LIMIT=1, AI_RATE_LIMIT_REQUESTS=10)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        first = await client.post("/api/analyze-payslip-ai", files=pdf())
+        second = await client.post("/api/analyze-payslip-ai", files=pdf())
+    assert first.status_code == 200
+    assert second.status_code == 429
+    assert second.json()["detail"] == {
+        "code": "AI_DAILY_LIMIT", "message": "Limite giornaliero del servizio AI raggiunto",
+    }
+    assert 1 <= int(second.headers["Retry-After"]) <= 86_400
+    assert len(calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_exhausted_daily_quota_takes_priority_over_rate_limit(monkeypatch):
+    calls = install_fake_ai(monkeypatch)
+    app = protected_app(monkeypatch, AI_DAILY_ANALYSIS_LIMIT=1, AI_RATE_LIMIT_REQUESTS=1)
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
         first = await client.post("/api/analyze-payslip-ai", files=pdf())
         second = await client.post("/api/analyze-payslip-ai", files=pdf())
     assert first.status_code == 200
     assert second.status_code == 429
     assert second.json()["detail"]["code"] == "AI_DAILY_LIMIT"
+    assert 1 <= int(second.headers["Retry-After"]) <= 86_400
     assert len(calls) == 1
 
 
@@ -291,3 +399,17 @@ async def test_cors_headers_on_preflight_and_rejections(monkeypatch):
     assert limited.status_code == 429
     for response in (preflight, too_large, limited):
         assert response.headers["Access-Control-Allow-Origin"] == origin
+
+
+@pytest.mark.asyncio
+async def test_actual_app_exposes_retry_after_to_browser(monkeypatch):
+    monkeypatch.setattr(payslip_app.state.ai_protection, "check_rate", lambda _key: 11)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=payslip_app), base_url="http://test") as client:
+        response = await client.post(
+            "/api/analyze-payslip-ai", files=pdf(), headers={"Origin": "http://localhost:3000"},
+        )
+    assert response.status_code == 429
+    assert response.json()["detail"]["code"] == "AI_RATE_LIMIT"
+    assert response.headers["Retry-After"] == "11"
+    assert response.headers["Access-Control-Allow-Origin"] == "http://localhost:3000"
+    assert "retry-after" in response.headers["Access-Control-Expose-Headers"].lower()

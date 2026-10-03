@@ -44,13 +44,56 @@ describe("diagnostica endpoint AI", () => {
 describe("errori dei controlli sull’endpoint AI", () => {
   it.each([
     { status: 413, body: JSON.stringify({ detail: "Documento troppo grande" }), message: "Il documento è troppo grande per l’analisi AI." },
-    { status: 429, body: "<html>rate limit</html>", message: "Troppe richieste di analisi AI." },
+    { status: 429, body: "<html>rate limit</html>", message: "Il servizio AI ha raggiunto un limite di utilizzo." },
     { status: 503, body: JSON.stringify({ detail: { code: "AI_BUSY" } }), message: "Il servizio AI è temporaneamente saturo." },
   ])("mostra un messaggio utile per HTTP $status, anche senza un codice JSON", async ({ status, body, message }) => {
     const file = new File(["%PDF-test"], `status-${status}.pdf`, { type: "application/pdf" });
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(body, { status })));
 
     await expect(requestPayslipAI(file)).rejects.toThrow(message);
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    { code: "AI_RATE_LIMIT", retryAfter: "75", message: "Troppe richieste di analisi AI. Riprova tra circa 2 minuti", excluded: "limite giornaliero" },
+    { code: "AI_RATE_LIMIT", retryAfter: "0", message: "Troppe richieste di analisi AI. Riprova ora", excluded: "tra poco" },
+    { code: "AI_DAILY_LIMIT", retryAfter: "3600", message: "Il limite giornaliero del servizio AI è stato raggiunto. Riprova tra circa 1 ora", excluded: "Troppe richieste" },
+    { code: "AI_RATE_LIMIT", retryAfter: null, message: "Troppe richieste di analisi AI. Riprova tra poco", excluded: "limite giornaliero" },
+    { code: "AI_DAILY_LIMIT", retryAfter: null, message: "Il limite giornaliero del servizio AI è stato raggiunto. Riprova quando si rinnova la quota giornaliera", excluded: "qualche minuto" },
+  ])("distingue $code e usa Retry-After quando disponibile", async ({ code, retryAfter, message, excluded }) => {
+    const file = new File(["%PDF-test"], `limit-${code}-${retryAfter}.pdf`, { type: "application/pdf" });
+    const headers = retryAfter ? { "Retry-After": retryAfter } : undefined;
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({ detail: { code } }), { status: 429, headers })));
+
+    const error = await requestPayslipAI(file).catch((cause: unknown) => cause as Error);
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toContain(message);
+    expect((error as Error).message).not.toContain(excluded);
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("interpreta anche Retry-After come data HTTP senza esporre un valore non valido", async () => {
+    const file = new File(["%PDF-test"], "rate-limit-date.pdf", { type: "application/pdf" });
+    const date = new Date(Date.now() + 180_000).toUTCString();
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(
+      JSON.stringify({ detail: { code: "AI_RATE_LIMIT" } }),
+      { status: 429, headers: { "Retry-After": date } },
+    )));
+    await expect(requestPayslipAI(file)).rejects.toThrow("Riprova tra circa 3 minuti");
+
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(
+      JSON.stringify({ detail: { code: "AI_DAILY_LIMIT" } }),
+      { status: 429, headers: { "Retry-After": "invalid" } },
+    )));
+    await expect(requestPayslipAI(new File(["%PDF-test"], "daily-limit-invalid-date.pdf"))).rejects.toThrow("Riprova quando si rinnova la quota giornaliera");
+  });
+
+  it("mostra un errore controllato quando scade il caricamento", async () => {
+    const file = new File(["%PDF-test"], "upload-timeout.pdf", { type: "application/pdf" });
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(
+      JSON.stringify({ detail: { code: "UPLOAD_TIMEOUT" } }), { status: 408 },
+    )));
+    await expect(requestPayslipAI(file)).rejects.toThrow("Il caricamento del documento non è stato completato in tempo. Riprova o continua con i dati locali.");
     expect(fetch).toHaveBeenCalledTimes(1);
   });
 

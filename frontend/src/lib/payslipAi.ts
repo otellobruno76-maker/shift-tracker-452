@@ -93,6 +93,21 @@ export function mergePayslipAnalyses(local: PayslipAnalysis, ai: PayslipAIResult
 }
 
 export interface AITimings { requestMs: number; parseMs: number; serverTiming: string | null }
+function retryAfterMessage(header: string | null): string | null {
+  if (!header) return null;
+  const value = header.trim();
+  const seconds = /^\d+$/.test(value) ? Number(value) : Math.ceil((Date.parse(value) - Date.now()) / 1000);
+  if (!Number.isFinite(seconds) || seconds < 0) return null;
+  if (seconds === 0) return "Riprova ora";
+  if (seconds < 60) return `Riprova tra ${seconds} ${seconds === 1 ? "secondo" : "secondi"}`;
+  const minutes = Math.ceil(seconds / 60);
+  if (minutes < 60) return `Riprova tra circa ${minutes} ${minutes === 1 ? "minuto" : "minuti"}`;
+  const hours = Math.ceil(seconds / 3600);
+  if (hours < 24) return `Riprova tra circa ${hours} ${hours === 1 ? "ora" : "ore"}`;
+  const days = Math.ceil(seconds / 86400);
+  return `Riprova tra circa ${days} ${days === 1 ? "giorno" : "giorni"}`;
+}
+
 const requests = new WeakMap<File, Promise<PayslipAIResult>>();
 export function requestPayslipAI(file: File, options: { signal?: AbortSignal; onPhase?: (label: string) => void; onTimings?: (timings: AITimings) => void } = {}): Promise<PayslipAIResult> {
   const existing = requests.get(file);
@@ -133,7 +148,12 @@ async function sendRequest(file: File, signal: AbortSignal, options: { onPhase?:
       code = typeof payload.detail === "object" ? payload.detail?.code ?? "" : "";
     } catch { /* risposta non JSON: tipica di proxy/static hosting */ }
     if (response.status === 413) throw new Error("Il documento è troppo grande per l’analisi AI. Usa un file più piccolo o continua con i dati locali.");
-    if (response.status === 429) throw new Error("Troppe richieste di analisi AI. Attendi qualche minuto prima di riprovare o continua con i dati locali.");
+    if (response.status === 429) {
+      const retryAfter = retryAfterMessage(response.headers.get("Retry-After"));
+      if (code === "AI_DAILY_LIMIT") throw new Error(`Il limite giornaliero del servizio AI è stato raggiunto. ${retryAfter ?? "Riprova quando si rinnova la quota giornaliera"} o continua con i dati locali.`);
+      if (code === "AI_RATE_LIMIT" || code === "AI_RATE_LIMITED") throw new Error(`Troppe richieste di analisi AI. ${retryAfter ?? "Riprova tra poco"} o continua con i dati locali.`);
+      throw new Error(`Il servizio AI ha raggiunto un limite di utilizzo. ${retryAfter ?? "Riprova più tardi"} o continua con i dati locali.`);
+    }
     if (response.status === 503 && code === "AI_BUSY") throw new Error("Il servizio AI è temporaneamente saturo. Riprova tra poco o continua con i dati locali.");
     const messages: Record<string, string> = {
       AI_NOT_CONFIGURED: "Chiave API non configurata",
@@ -142,6 +162,7 @@ async function sendRequest(file: File, signal: AbortSignal, options: { onPhase?:
       MODEL_NOT_AVAILABLE: "Modello AI non disponibile",
       OPENAI_BAD_REQUEST: "Richiesta AI non valida",
       OPENAI_TIMEOUT: "Il servizio AI non ha risposto in tempo",
+      UPLOAD_TIMEOUT: "Il caricamento del documento non è stato completato in tempo. Riprova o continua con i dati locali.",
       INVALID_AI_RESPONSE: "Risposta AI non valida",
     };
     if (messages[code]) throw new Error(messages[code]);

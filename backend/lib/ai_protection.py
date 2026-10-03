@@ -6,6 +6,7 @@ are deliberately process-local: no authenticated user or shared store exists.
 
 from __future__ import annotations
 
+import asyncio
 import ipaddress
 import math
 import os
@@ -20,6 +21,8 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 DEFAULT_MAX_UPLOAD_BYTES = 15 * 1024 * 1024
 DEFAULT_MULTIPART_OVERHEAD_BYTES = 16 * 1024
+AI_DAILY_LIMIT_CODE = "AI_DAILY_LIMIT"
+AI_DAILY_LIMIT_MESSAGE = "Limite giornaliero del servizio AI raggiunto"
 
 
 def _positive_int(name: str, default: int) -> int:
@@ -29,10 +32,18 @@ def _positive_int(name: str, default: int) -> int:
     return value
 
 
+def _positive_finite_float(name: str, default: float) -> float:
+    value = float(os.getenv(name, str(default)))
+    if not math.isfinite(value) or value <= 0:
+        raise ValueError(f"{name} must be a positive finite number")
+    return value
+
+
 @dataclass(frozen=True)
 class AIProtectionConfig:
     max_upload_bytes: int
     multipart_overhead_bytes: int
+    upload_timeout_seconds: float
     rate_limit_requests: int
     rate_limit_window_seconds: int
     rate_clients_max: int
@@ -52,6 +63,7 @@ class AIProtectionConfig:
         return cls(
             max_upload_bytes=_positive_int("AI_MAX_UPLOAD_BYTES", DEFAULT_MAX_UPLOAD_BYTES),
             multipart_overhead_bytes=_positive_int("AI_MULTIPART_OVERHEAD_BYTES", DEFAULT_MULTIPART_OVERHEAD_BYTES),
+            upload_timeout_seconds=_positive_finite_float("AI_UPLOAD_TIMEOUT_SECONDS", 60.0),
             rate_limit_requests=_positive_int("AI_RATE_LIMIT_REQUESTS", 6),
             rate_limit_window_seconds=_positive_int("AI_RATE_LIMIT_WINDOW_SECONDS", 60),
             rate_clients_max=_positive_int("AI_RATE_CLIENTS_MAX", 10_000),
@@ -146,20 +158,30 @@ class AIProtection:
         with self._lock:
             self._active -= 1
 
-    def claim_daily_analysis(self) -> int | None:
-        """Count only validated documents admitted to an AI call.
-
-        The count resets at midnight UTC. A failed provider request still
-        consumes one admission because it may incur cost.
-        """
-        now = time.time()
+    def _daily_retry_after_locked(self, now: float) -> int | None:
         day = int(now // 86_400)
+        if day != self._utc_day:
+            self._utc_day = day
+            self._daily_analyses = 0
+        if self._daily_analyses >= self.config.daily_analysis_limit:
+            return max(1, math.ceil((day + 1) * 86_400 - now))
+        return None
+
+    def check_daily_limit(self) -> int | None:
+        """Check an exhausted quota before rate limiting, without claiming it."""
         with self._lock:
-            if day != self._utc_day:
-                self._utc_day = day
-                self._daily_analyses = 0
-            if self._daily_analyses >= self.config.daily_analysis_limit:
-                return max(1, math.ceil((day + 1) * 86_400 - now))
+            return self._daily_retry_after_locked(time.time())
+
+    def claim_daily_analysis(self) -> int | None:
+        """Count validated documents admitted to an AI call, resetting at UTC midnight.
+
+        A failed provider request still consumes an admission because it may
+        incur cost. The claim remains atomic after document validation.
+        """
+        with self._lock:
+            retry_after = self._daily_retry_after_locked(time.time())
+            if retry_after is not None:
+                return retry_after
             self._daily_analyses += 1
         return None
 
@@ -195,9 +217,14 @@ class AIProtectionMiddleware:
             await _error(413, "UPLOAD_TOO_LARGE", "Documento troppo grande")(scope, receive, send)
             return
 
+        daily_retry_after = self.guard.check_daily_limit()
+        if daily_retry_after is not None:
+            await _error(429, AI_DAILY_LIMIT_CODE, AI_DAILY_LIMIT_MESSAGE, daily_retry_after)(scope, receive, send)
+            return
+
         retry_after = self.guard.check_rate(self.guard.client_key(scope))
         if retry_after is not None:
-            await _error(429, "AI_RATE_LIMITED", "Troppe richieste. Riprova tra poco.", retry_after)(scope, receive, send)
+            await _error(429, "AI_RATE_LIMIT", "Troppe richieste. Riprova tra poco.", retry_after)(scope, receive, send)
             return
 
         if not self.guard.acquire_slot():
@@ -205,10 +232,25 @@ class AIProtectionMiddleware:
             return
 
         received = 0
+        upload_complete = False
+        loop = asyncio.get_running_loop()
+        upload_deadline = loop.time() + self.guard.config.upload_timeout_seconds
+        timeout_detail = {"code": "UPLOAD_TIMEOUT", "message": "Caricamento del documento scaduto"}
 
         async def limited_receive() -> Message:
-            nonlocal received
-            message = await receive()
+            nonlocal received, upload_complete
+            if upload_complete:
+                message = await receive()
+            else:
+                if loop.time() >= upload_deadline:
+                    raise HTTPException(status_code=408, detail=timeout_detail)
+                try:
+                    async with asyncio.timeout_at(upload_deadline):
+                        message = await receive()
+                except TimeoutError as exc:
+                    raise HTTPException(status_code=408, detail=timeout_detail) from exc
+                if loop.time() >= upload_deadline:
+                    raise HTTPException(status_code=408, detail=timeout_detail)
             if message["type"] == "http.request":
                 received += len(message.get("body", b""))
                 if received > max_bytes:
@@ -218,6 +260,8 @@ class AIProtectionMiddleware:
                         status_code=413,
                         detail={"code": "UPLOAD_TOO_LARGE", "message": "Documento troppo grande"},
                     )
+                if not message.get("more_body", False):
+                    upload_complete = True
             return message
 
         try:

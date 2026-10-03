@@ -46,6 +46,7 @@ un indirizzo IP limita l'abuso, ma non costituisce una quota per utente.
 | --- | ---: | --- |
 | `AI_MAX_UPLOAD_BYTES` | `15728640` (15 MiB) | Dimensione massima del file; il corpo multipart ha un ulteriore margine limitato. |
 | `AI_MULTIPART_OVERHEAD_BYTES` | `16384` (16 KiB) | Margine massimo per boundary e intestazioni multipart. |
+| `AI_UPLOAD_TIMEOUT_SECONDS` | `60` | Tempo massimo assoluto, in secondi, per ricevere il corpo dell'upload; accetta un numero positivo finito. |
 | `AI_RATE_LIMIT_REQUESTS` | `6` | Richieste per client di rete nella finestra mobile. |
 | `AI_RATE_LIMIT_WINDOW_SECONDS` | `60` | Durata della finestra del rate limit. |
 | `AI_RATE_CLIENTS_MAX` | `10000` | Numero massimo di client di rete tenuti nei contatori in memoria; nuovi client ricevono HTTP 429 finché gli altri scadono. |
@@ -57,20 +58,72 @@ Il limite sul corpo HTTP viene applicato all'ingresso ASGI: le richieste con
 `Content-Length` eccessivo sono respinte prima del parsing multipart; per le
 altre, la lettura viene interrotta durante lo streaming non appena supera il
 limite, con HTTP 413 e senza completare il caricamento o chiamare OpenAI.
+Il middleware ASGI, eseguito prima del parser multipart di FastAPI, impone una
+scadenza assoluta per ricevere l'intero corpo dal momento in cui la richiesta
+ottiene uno slot di concorrenza. Un upload incompleto alla scadenza riceve
+HTTP 408 con codice `UPLOAD_TIMEOUT`; lo slot viene liberato e OpenAI non viene
+chiamato.
+Questa scadenza riguarda la ricezione del corpo, non la successiva analisi AI.
 La route controlla di nuovo la dimensione esatta del file prima di chiamare
-OpenAI. I contatori sono mantenuti in memoria, quindi si azzerano al riavvio e
-non si condividono tra worker o istanze. Il budget del progetto OpenAI resta il
-limite esterno da impostare per contenere la spesa anche in caso di riavvii.
+OpenAI. Il rate limit per IP, la quota giornaliera e il limite di concorrenza
+sono tutti **per processo**, con contatori in memoria. Un riavvio azzera i
+contatori; più worker o istanze moltiplicano i limiti effettivi. In particolare,
+`AI_DAILY_ANALYSIS_LIMIT=200` indica 200 ammissioni al giorno UTC **per
+processo**, non una garanzia globale né una quota per account. La quota
+giornaliera è condivisa da tutti i client ammessi in quel processo. Il budget
+del progetto OpenAI resta il limite esterno da impostare per contenere la spesa
+anche in caso di riavvii.
 
-Prima del prossimo deploy su Render, impostare il comando di avvio indicato
-sopra, con `--workers 1 --no-proxy-headers`: Uvicorn altrimenti può riscrivere
-l'IP del peer dai forwarded header prima che il servizio verifichi il proxy.
-Lasciare `AI_TRUSTED_PROXY_CIDRS` vuoto finché gli indirizzi effettivi dei proxy
-Render e il loro comportamento su `X-Forwarded-For` non sono verificati. Con la
-variabile vuota, i forwarded header inviati dal client sono ignorati; se Render
-concentra le richieste dietro un peer condiviso, più utenti condivideranno il
-rate limit. Una vera quota per account richiederà autenticazione verificata e un
-contatore persistente condiviso tra le istanze.
+#### Identificazione del client dietro Render
+
+Il comando di avvio previsto per il prossimo deploy è quello sopra, con
+`--workers 1 --no-proxy-headers`: Uvicorn non deve sostituire il peer della
+connessione con un valore di un header prima della verifica applicativa. Con
+`AI_TRUSTED_PROXY_CIDRS` vuoto, il servizio usa `scope["client"][0]` e ignora
+`X-Forwarded-For`. Se più utenti arrivano attraverso lo stesso peer Render,
+condivideranno la stessa finestra di rate limit IP e potrebbero ricevere 429
+anche con poche richieste individuali. Non è ancora verificato se il deployment
+Render effettivo presenta questa topologia.
+
+Prima di valorizzare `AI_TRUSTED_PROXY_CIDRS`, raccogliere **sul deployment
+effettivo** queste informazioni:
+
+1. Comando di avvio e opzioni Uvicorn realmente attivi, numero di worker,
+   istanze e percorsi d'ingresso (inclusi eventuali CDN o proxy aggiuntivi).
+2. Indirizzo IP del peer TCP osservato da FastAPI per richieste di prova
+   attraverso ciascun percorso, incluse eventuali varianti IPv4 e IPv6; chi
+   gestisce ciascun peer e quali intervalli CIDR ufficiali, completi e
+   mantenuti nel tempo lo comprendono.
+3. Comportamento di ogni proxy su `X-Forwarded-For`: se rimuove o conserva
+   valori inviati dal client, se aggiunge il peer a destra e in quale ordine,
+   come tratta header multipli e se la catena cambia fra percorsi d'ingresso.
+4. Possibilità di raggiungere il servizio senza i proxy verificati; se esiste,
+   queste connessioni devono restare non fidate. Serve inoltre sapere come
+   aggiornare e riverificare gli intervalli quando Render o la topologia cambia.
+
+Per osservare il peer, eseguire richieste controllate da reti note e leggere
+temporaneamente `scope["client"][0]` (o `request.client.host`) in una risposta
+diagnostica accessibile solo all'operatore, con `Cache-Control: no-store`; il
+valore deve riflettere il socket con `--no-proxy-headers` davvero attivo.
+Verificare la catena con le **sole richieste di prova dell'operatore**, ripetute
+anche con un valore `X-Forwarded-For` deliberatamente fittizio inviato dal
+client: confrontare gli header ricevuti, l'ordine degli hop e il peer reale.
+La diagnostica può restituire gli header all'operatore per la verifica puntuale,
+ma va rimossa subito dopo. Non registrare gli IP o l'intera catena delle
+richieste ordinarie in log, tracing o analytics; conservare solo l'esito della
+verifica, i CIDR confermati e la data/fonte della conferma. Non inserire token
+diagnostici negli URL.
+
+Valorizzare `AI_TRUSTED_PROXY_CIDRS` **solo** con i CIDR dei peer proxy
+effettivamente controllati e verificati, dopo aver confermato che il percorso
+non consenta al client di far accettare un IP arbitrario come propria identità.
+La scansione applicativa di `X-Forwarded-For` procede da destra verso sinistra,
+partendo dal peer fidato e fermandosi al primo hop non fidato. Un header
+forgiato non diventa attendibile soltanto perché è presente. Se indirizzi,
+catena o possibilità di accesso diretto restano incerti, lasciare la variabile
+vuota e considerare il rate limit IP un limite approssimativo per peer di rete.
+Una vera quota per account richiederebbe un'identità verificata e contatori
+condivisi e persistenti.
 
 ## The `/api` proxy convention
 

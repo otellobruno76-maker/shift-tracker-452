@@ -17,7 +17,7 @@ import httpx
 from fastapi import APIRouter, File, HTTPException, Request, UploadFile, Response
 from pydantic import BaseModel, Field
 
-from lib.ai_protection import DEFAULT_MAX_UPLOAD_BYTES
+from lib.ai_protection import AI_DAILY_LIMIT_CODE, AI_DAILY_LIMIT_MESSAGE, DEFAULT_MAX_UPLOAD_BYTES
 
 router = APIRouter()
 MAX_PAYSLIP_BYTES = DEFAULT_MAX_UPLOAD_BYTES
@@ -349,7 +349,7 @@ async def analyze_payslip_ai(request: Request, response: Response, file: UploadF
         if retry_after is not None:
             raise HTTPException(
                 status_code=429,
-                detail={"code": "AI_DAILY_LIMIT", "message": "Limite giornaliero del servizio AI raggiunto"},
+                detail={"code": AI_DAILY_LIMIT_CODE, "message": AI_DAILY_LIMIT_MESSAGE},
                 headers={"Retry-After": str(retry_after)},
             )
         # The document is already in memory. No additional disk copy or original filename.

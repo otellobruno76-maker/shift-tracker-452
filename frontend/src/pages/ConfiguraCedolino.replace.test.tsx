@@ -192,7 +192,7 @@ describe("sostituzione di un cedolino già corretto", () => {
 
 describe("errore dell’analisi AI nella revisione", () => {
   it("mostra il limite raggiunto, conserva la lettura locale e consente di riprovare", async () => {
-    const message = "Troppe richieste di analisi AI. Attendi qualche minuto prima di riprovare o continua con i dati locali.";
+    const message = "Troppe richieste di analisi AI. Riprova tra poco o continua con i dati locali.";
     mocks.structured.mockReturnValue(analysis(10, 1500, 30));
     mocks.ai.mockRejectedValueOnce(new Error(message)).mockResolvedValueOnce(aiResult());
 
@@ -209,5 +209,20 @@ describe("errore dell’analisi AI nella revisione", () => {
     fireEvent.click(screen.getByTestId("btn-confirm-ai"));
     await waitFor(() => expect(mocks.ai).toHaveBeenCalledTimes(2));
     await waitFor(() => expect(screen.queryByText(message)).toBeNull());
+  });
+
+  it("mostra chiaramente il limite giornaliero mantenendo la lettura locale", async () => {
+    const message = "Il limite giornaliero del servizio AI è stato raggiunto. Riprova tra circa 12 ore o continua con i dati locali.";
+    mocks.structured.mockReturnValue(analysis(10, 1500, 30));
+    mocks.ai.mockRejectedValue(new Error(message));
+
+    mount("/configura-cedolino");
+    await upload("daily-limit.pdf");
+    fireEvent.click(screen.getByRole("button", { name: "Avvia analisi avanzata con AI" }));
+    fireEvent.click(screen.getByTestId("btn-confirm-ai"));
+
+    expect((await screen.findByRole("alert")).textContent).toBe(message);
+    expect((screen.getByRole("textbox", { name: "Paga oraria di riferimento" }) as HTMLInputElement).value).toBe("10");
+    expect((screen.getByTestId("btn-apply-payslip") as HTMLButtonElement).disabled).toBe(false);
   });
 });
