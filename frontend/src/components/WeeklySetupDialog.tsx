@@ -33,6 +33,7 @@ export default function WeeklySetupDialog() {
   const [anchorDate, setAnchorDate] = useState(todayISO());
   const [selectedDays, setSelectedDays] = useState<number[]>([0, 1, 2, 3, 4]);
   const [hours, setHours] = useState(String(settings.dailyOrdinaryHours));
+  const [saving, setSaving] = useState(false);
 
   const monday = useMemo(() => mondayOf(anchorDate), [anchorDate]);
   const dates = useMemo(
@@ -46,7 +47,7 @@ export default function WeeklySetupDialog() {
   const minutes = Math.round((Number(hours.replace(",", ".")) || 0) * 60);
   const total = minutes * selectedDays.length;
 
-  const createWeek = () => {
+  const createWeek = async () => {
     if (selectedDays.length === 0) {
       toast.error("Scegli almeno un giorno lavorativo.");
       return;
@@ -78,11 +79,22 @@ export default function WeeklySetupDialog() {
         updatedAt: now,
       }));
     const skipped = selectedDays.length - entries.length;
-    saveEntries(entries);
-    setOpen(false);
     if (entries.length === 0) {
       toast.error("I giorni scelti contengono già delle registrazioni.");
-    } else if (skipped > 0) {
+      return;
+    }
+    setSaving(true);
+    try {
+      await saveEntries(entries);
+    } catch (error) {
+      toast.error(error instanceof Error && error.message.includes("un'altra scheda")
+        ? error.message : "Impossibile salvare la settimana. Riprova.");
+      setSaving(false);
+      return;
+    }
+    setSaving(false);
+    setOpen(false);
+    if (skipped > 0) {
       toast.success(`${entries.length} giorni compilati; ${skipped} già presenti non modificati.`);
     } else {
       toast.success(`${entries.length} giorni compilati: ${fmtHours(total)} ordinarie.`);
@@ -103,7 +115,7 @@ export default function WeeklySetupDialog() {
         Imposta settimana lavorativa
       </Button>
 
-      <Dialog open={open} onOpenChange={setOpen}>
+      <Dialog open={open} onOpenChange={(nextOpen) => { if (!saving) setOpen(nextOpen); }}>
         <DialogContent className="max-h-[90svh] overflow-y-auto rounded-2xl" data-testid="weekly-setup-dialog">
           <DialogHeader>
             <DialogTitle>Imposta settimana lavorativa</DialogTitle>
@@ -167,8 +179,8 @@ export default function WeeklySetupDialog() {
           </div>
 
           <DialogFooter className="gap-2">
-            <Button variant="outline" onClick={() => setOpen(false)}>Annulla</Button>
-            <Button data-testid="btn-confirm-weekly-setup" onClick={createWeek}>Inserisci nel calendario</Button>
+            <Button variant="outline" disabled={saving} onClick={() => setOpen(false)}>Annulla</Button>
+            <Button data-testid="btn-confirm-weekly-setup" disabled={saving} onClick={createWeek}>Inserisci nel calendario</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

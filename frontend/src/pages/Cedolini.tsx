@@ -26,6 +26,22 @@ export default function Cedolini() {
   const payslips = usePayslips();
   const [editing, setEditing] = useState<PayslipRecord | null>(null);
   const [deleting, setDeleting] = useState<PayslipRecord | null>(null);
+  const [deletingBusy, setDeletingBusy] = useState(false);
+
+  const confirmDelete = async () => {
+    if (!deleting || deletingBusy) return;
+    setDeletingBusy(true);
+    try {
+      await deletePayslip(deleting.id, deleting);
+      setDeleting(null);
+      toast.success("Cedolino eliminato.");
+    } catch (error) {
+      toast.error(error instanceof Error && error.message.includes("un'altra scheda")
+        ? error.message : "Impossibile eliminare il cedolino. Riprova.");
+    } finally {
+      setDeletingBusy(false);
+    }
+  };
 
   return (
     <div className="pb-10">
@@ -52,7 +68,7 @@ export default function Cedolini() {
       )}
 
       <EditDialog record={editing} onClose={() => setEditing(null)} />
-      <Dialog open={deleting !== null} onOpenChange={(open) => { if (!open) setDeleting(null); }}><DialogContent className="rounded-2xl"><DialogHeader><DialogTitle>Eliminare il cedolino di {deleting ? monthLabel(deleting.month) : "questo mese"}?</DialogTitle></DialogHeader><p className="text-sm text-[#64748B]">Saranno rimossi solo i dati salvati di questo cedolino. Le impostazioni generali non cambieranno.</p><DialogFooter className="gap-2"><Button variant="outline" onClick={() => setDeleting(null)}>Annulla</Button><Button variant="destructive" onClick={() => { if (deleting) deletePayslip(deleting.id); setDeleting(null); toast.success("Cedolino eliminato."); }}>Elimina</Button></DialogFooter></DialogContent></Dialog>
+      <Dialog open={deleting !== null} onOpenChange={(open) => { if (!open && !deletingBusy) setDeleting(null); }}><DialogContent className="rounded-2xl"><DialogHeader><DialogTitle>Eliminare il cedolino di {deleting ? monthLabel(deleting.month) : "questo mese"}?</DialogTitle></DialogHeader><p className="text-sm text-[#64748B]">Saranno rimossi solo i dati salvati di questo cedolino. Le impostazioni generali non cambieranno.</p><DialogFooter className="gap-2"><Button variant="outline" disabled={deletingBusy} onClick={() => setDeleting(null)}>Annulla</Button><Button variant="destructive" disabled={deletingBusy} onClick={() => void confirmDelete()}>Elimina</Button></DialogFooter></DialogContent></Dialog>
     </div>
   );
 }
@@ -60,8 +76,25 @@ export default function Cedolini() {
 function EditDialog({ record, onClose }: { record: PayslipRecord | null; onClose: () => void }) {
   const payslips = usePayslips();
   const [draft, setDraft] = useState<PayslipRecord | null>(record);
+  const [saving, setSaving] = useState(false);
   useEffect(() => setDraft(record), [record]);
   const update = (patch: Partial<PayslipRecord>) => draft && setDraft({ ...draft, ...patch });
+  const confirmSave = async () => {
+    if (!draft?.month) return toast.error("Scegli mese e anno.");
+    if (payslips.some((item) => item.month === draft.month && item.id !== draft.id)) return toast.error("Esiste già un cedolino per questo mese.");
+    if (saving) return;
+    setSaving(true);
+    try {
+      await savePayslip({ ...draft, updatedAt: new Date().toISOString() }, record);
+      onClose();
+      toast.success("Correzioni salvate.");
+    } catch (error) {
+      toast.error(error instanceof Error && (error.message.includes("un'altra scheda") || error.message.includes("Esiste già"))
+        ? error.message : "Impossibile salvare le correzioni. Riprova.");
+    } finally {
+      setSaving(false);
+    }
+  };
   return <Dialog open={record !== null} onOpenChange={(open) => { if (!open) onClose(); }}><DialogContent className="max-h-[92svh] overflow-y-auto rounded-2xl"><DialogHeader><DialogTitle>Dettaglio cedolino</DialogTitle></DialogHeader>{draft && <div className="space-y-3">
     <Field label="Mese e anno"><Input type="month" value={draft.month} onChange={(event) => update({ month: event.target.value })} /></Field>
     <Field label="Tipo di retribuzione"><select className="h-11 w-full rounded-md border border-input bg-white px-3" value={draft.payType ?? ""} onChange={(event) => update({ payType: event.target.value as PayslipRecord["payType"] })}><option value="">Non specificato</option><option value="oraria">Oraria</option><option value="giornaliera">Giornaliera</option><option value="mensile">Mensile</option></select></Field>
@@ -80,7 +113,7 @@ function EditDialog({ record, onClose }: { record: PayslipRecord | null; onClose
     {draft.allowances.length > 0 && <div className="rounded-xl bg-[#F8FAFC] p-3"><p className="text-sm font-extrabold">Indennità</p>{draft.allowances.map((item, index) => <p key={index} className="mt-1 text-sm">{item.name}: {item.amount === null ? "importo non rilevato" : `${item.amount.toLocaleString("it-IT")} €`}</p>)}</div>}
     {draft.totals.length > 0 && <div className="rounded-xl bg-[#F8FAFC] p-3"><p className="text-sm font-extrabold">Totali rilevati</p>{draft.totals.map((item, index) => <p key={index} className="mt-1 text-sm">{item.label}: {item.value.toLocaleString("it-IT")}</p>)}</div>}
     <p className="text-xs text-[#64748B]">Caricato il {new Date(draft.uploadedAt).toLocaleDateString("it-IT")} · Base pronta per il futuro confronto con le ore registrate nell’app.</p>
-  </div>}<DialogFooter className="gap-2"><Button variant="outline" onClick={onClose}>Chiudi</Button><Button data-testid="btn-save-payslip-edits" onClick={() => { if (!draft?.month) return toast.error("Scegli mese e anno."); if (payslips.some((item) => item.month === draft.month && item.id !== draft.id)) return toast.error("Esiste già un cedolino per questo mese."); savePayslip({ ...draft, updatedAt: new Date().toISOString() }); onClose(); toast.success("Correzioni salvate."); }}>Salva correzioni</Button></DialogFooter></DialogContent></Dialog>;
+  </div>}<DialogFooter className="gap-2"><Button variant="outline" disabled={saving} onClick={onClose}>Chiudi</Button><Button data-testid="btn-save-payslip-edits" disabled={saving} onClick={() => void confirmSave()}>Salva correzioni</Button></DialogFooter></DialogContent></Dialog>;
 }
 
 function Field({ label, children }: { label: string; children: ReactNode }) {

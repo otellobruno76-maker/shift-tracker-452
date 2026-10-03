@@ -20,6 +20,7 @@ import { computeSplits } from "@/lib/stats";
 import { deleteEntry, saveEntry, useDays, useSettings } from "@/lib/store";
 import { DAY_TYPE_LABELS } from "@/lib/types";
 import type { EntrySplit } from "@/lib/stats";
+import type { DayEntry } from "@/lib/types";
 
 interface EntrySheetProps {
   date: string | null;
@@ -31,8 +32,12 @@ export default function EntrySheet({ date, onOpenChange }: EntrySheetProps) {
   const settings = useSettings();
   const navigate = useNavigate();
   const [deleteId, setDeleteId] = useState<string | null>(null);
+  const [deleteSource, setDeleteSource] = useState<DayEntry | null>(null);
+  const [deleting, setDeleting] = useState(false);
   const [overtimeId, setOvertimeId] = useState<string | null>(null);
+  const [overtimeSource, setOvertimeSource] = useState<DayEntry | null>(null);
   const [overtimeHours, setOvertimeHours] = useState("");
+  const [savingOvertime, setSavingOvertime] = useState(false);
   const splits = date ? computeSplits(days, settings).filter((s) => s.entry.date === date) : [];
 
   return (
@@ -67,8 +72,9 @@ export default function EntrySheet({ date, onOpenChange }: EntrySheetProps) {
                 onOpenChange(false);
                 navigate(`/inserisci?copia=${split.entry.id}`);
               }}
-              onDelete={() => setDeleteId(split.entry.id)}
+              onDelete={() => { setDeleteSource(split.entry); setDeleteId(split.entry.id); }}
               onOvertime={() => {
+                setOvertimeSource(split.entry);
                 setOvertimeId(split.entry.id);
                 setOvertimeHours(String((split.entry.manualOvertimeMinutes ?? 0) / 60));
               }}
@@ -76,7 +82,7 @@ export default function EntrySheet({ date, onOpenChange }: EntrySheetProps) {
           ))}
         </div>
 
-        <Dialog open={deleteId !== null} onOpenChange={(open) => { if (!open) setDeleteId(null); }}>
+        <Dialog open={deleteId !== null} onOpenChange={(open) => { if (!open && !deleting) setDeleteId(null); }}>
           <DialogContent className="rounded-2xl" data-testid="delete-confirm-dialog">
             <DialogHeader>
               <DialogTitle data-testid="delete-confirm-title">
@@ -91,6 +97,7 @@ export default function EntrySheet({ date, onOpenChange }: EntrySheetProps) {
                 variant="outline"
                 className="h-12 flex-1 text-base font-bold"
                 data-testid="btn-cancel-delete"
+                disabled={deleting}
                 onClick={() => setDeleteId(null)}
               >
                 Annulla
@@ -99,9 +106,21 @@ export default function EntrySheet({ date, onOpenChange }: EntrySheetProps) {
                 variant="destructive"
                 className="h-12 flex-1 text-base font-bold"
                 data-testid="btn-confirm-delete"
-                onClick={() => {
-                  if (deleteId) deleteEntry(deleteId);
+                disabled={deleting}
+                onClick={async () => {
+                  if (!deleteId) return;
+                  setDeleting(true);
+                  try {
+                    await deleteEntry(deleteId, deleteSource ?? undefined);
+                  } catch (error) {
+                    toast.error(error instanceof Error && error.message.includes("un'altra scheda")
+                      ? error.message : "Impossibile eliminare la giornata. Riprova.");
+                    setDeleting(false);
+                    return;
+                  }
+                  setDeleting(false);
                   setDeleteId(null);
+                  setDeleteSource(null);
                   onOpenChange(false);
                   toast.success("Giornata eliminata.");
                 }}
@@ -112,7 +131,7 @@ export default function EntrySheet({ date, onOpenChange }: EntrySheetProps) {
           </DialogContent>
         </Dialog>
 
-        <Dialog open={overtimeId !== null} onOpenChange={(open) => { if (!open) setOvertimeId(null); }}>
+        <Dialog open={overtimeId !== null} onOpenChange={(open) => { if (!open && !savingOvertime) setOvertimeId(null); }}>
           <DialogContent className="rounded-2xl" data-testid="overtime-dialog">
             <DialogHeader>
               <DialogTitle>Aggiungi straordinario</DialogTitle>
@@ -131,10 +150,11 @@ export default function EntrySheet({ date, onOpenChange }: EntrySheetProps) {
               <p className="mt-2 text-xs text-[#64748B]">Puoi usare 1,5 per indicare un'ora e mezza.</p>
             </div>
             <DialogFooter className="gap-2">
-              <Button variant="outline" onClick={() => setOvertimeId(null)}>Annulla</Button>
+              <Button variant="outline" disabled={savingOvertime} onClick={() => setOvertimeId(null)}>Annulla</Button>
               <Button
                 data-testid="btn-save-overtime"
-                onClick={() => {
+                disabled={savingOvertime}
+                onClick={async () => {
                   const value = Number(overtimeHours.replace(",", "."));
                   if (!Number.isFinite(value) || value < 0 || value > 16) {
                     toast.error("Controlla le ore di straordinario.");
@@ -142,12 +162,22 @@ export default function EntrySheet({ date, onOpenChange }: EntrySheetProps) {
                   }
                   const entry = days.find((item) => item.id === overtimeId);
                   if (!entry) return;
-                  saveEntry({
-                    ...entry,
-                    manualOvertimeMinutes: Math.round(value * 60),
-                    updatedAt: new Date().toISOString(),
-                  });
+                  setSavingOvertime(true);
+                  try {
+                    await saveEntry({
+                      ...entry,
+                      manualOvertimeMinutes: Math.round(value * 60),
+                      updatedAt: new Date().toISOString(),
+                    }, overtimeSource);
+                  } catch (error) {
+                    toast.error(error instanceof Error && error.message.includes("un'altra scheda")
+                      ? error.message : "Impossibile salvare lo straordinario. Riprova.");
+                    setSavingOvertime(false);
+                    return;
+                  }
+                  setSavingOvertime(false);
                   setOvertimeId(null);
+                  setOvertimeSource(null);
                   toast.success("Straordinario aggiornato.");
                 }}
               >

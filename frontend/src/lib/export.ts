@@ -1,11 +1,12 @@
 // Download helpers for the three exports: CSV, simple PDF
 // ("Riepilogo Presenze e Stima Retribuzione") and JSON backup.
 import { buildMonthCSV } from "./csv";
+import { validateBackup } from "./backup";
 import { fmtDateIt, monthLabel, parseMonthKey, weekdayShort } from "./dates";
 import { fmtEUR, fmtHours } from "./hours";
 import { buildPdf, type PdfCell, type PdfLine } from "./pdf";
 import { computeSplits, statsForMonth } from "./stats";
-import { exportBackupPayload, importBackup } from "./store";
+import { exportBackupPayload } from "./store";
 import { DAY_TYPE_LABELS, type DayEntry, type Settings } from "./types";
 
 function downloadBlob(blob: Blob, filename: string): void {
@@ -25,21 +26,20 @@ export function exportMonthCSV(days: DayEntry[], settings: Settings, monthKeyVal
   downloadBlob(new Blob([csv], { type: "text/csv;charset=utf-8" }), `registro-ore-${monthKeyValue}.csv`);
 }
 
-export function exportBackupFile(): void {
+export async function exportBackupFile(): Promise<void> {
+  const payload = await exportBackupPayload();
   const stamp = new Date().toISOString().slice(0, 10);
   downloadBlob(
-    new Blob([exportBackupPayload()], { type: "application/json" }),
+    new Blob([payload], { type: "application/json" }),
     `registro-ore-backup-${stamp}.json`,
   );
 }
 
-export async function importBackupFile(file: File): Promise<boolean> {
-  try {
-    const data = JSON.parse(await file.text());
-    return importBackup(data);
-  } catch {
-    return false;
-  }
+export async function readBackupFile(file: File): Promise<unknown> {
+  const contents = await file.text();
+  const data: unknown = JSON.parse(contents);
+  validateBackup(data);
+  return data;
 }
 
 function monthPdfLines(days: DayEntry[], settings: Settings, monthKeyValue: string): PdfLine[] {

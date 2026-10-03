@@ -1,9 +1,11 @@
+import { useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { removeDemoData, useDemoActive } from "@/lib/store";
 
 export default function DemoBanner() {
   const demo = useDemoActive();
+  const [removing, setRemoving] = useState(false);
   if (!demo) return null;
   return (
     <div
@@ -14,15 +16,24 @@ export default function DemoBanner() {
         Dati di prova
       </p>
       <p className="mt-1 text-sm text-[#92400E]">
-        Stai guardando giorni di esempio per provare l'app. Quando vuoi, rimuovili e inizia con i
-        tuoi dati reali.
+        Puoi rimuovere i dati di prova identificabili con certezza. Le tue registrazioni e i dati
+        di origine incerta resteranno salvati.
       </p>
       <Button
         className="mt-3 h-12 w-full bg-[#D97706] text-base font-bold text-white hover:bg-[#B45309]"
         data-testid="btn-remove-demo-data"
-        onClick={() => {
-          removeDemoData();
-          toast.success("Dati di prova rimossi. L'app è vuota e pronta per i tuoi dati.");
+        disabled={removing}
+        onClick={async () => {
+          setRemoving(true);
+          try {
+            await removeDemoData();
+          } catch {
+            toast.error("Impossibile rimuovere i dati di prova. Riprova.");
+            setRemoving(false);
+            return;
+          }
+          setRemoving(false);
+          toast.success("Dati di prova identificati rimossi. Le tue registrazioni sono state conservate.");
         }}
       >
         Rimuovi dati di prova

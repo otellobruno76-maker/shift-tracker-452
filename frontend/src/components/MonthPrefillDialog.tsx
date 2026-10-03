@@ -33,6 +33,7 @@ export default function MonthPrefillDialog({ open, monthKey, initialDates, onOpe
   const [startDate, setStartDate] = useState(initialDates?.[0] ?? `${monthKey}-01`);
   const [endDate, setEndDate] = useState(initialDates?.at(-1) ?? `${monthKey}-28`);
   const [overwrite, setOverwrite] = useState(false);
+  const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     if (!open) return;
@@ -55,7 +56,7 @@ export default function MonthPrefillDialog({ open, monthKey, initialDates, onOpe
   const datesToWrite = overwrite ? candidateDates : candidateDates.filter((date) => !occupied.includes(date));
   const minutes = Math.round(Number(hours.replace(",", ".")) * 60);
 
-  const save = () => {
+  const save = async () => {
     if (weekdays.length === 0) return toast.error("Scegli almeno un giorno lavorativo.");
     if (!Number.isFinite(minutes) || minutes <= 0 || minutes > 24 * 60) return toast.error("Controlla le ore ordinarie giornaliere.");
     if (period === "range" && (!startDate || !endDate || startDate > endDate)) return toast.error("Controlla l’intervallo scelto.");
@@ -67,14 +68,23 @@ export default function MonthPrefillDialog({ open, monthKey, initialDates, onOpe
       manualOvertimeMinutes: 0,
       note: "Ore ordinarie precompilate",
     }));
-    applyBulkEntries(entries, overwrite ? occupied : []);
+    setSaving(true);
+    try {
+      await applyBulkEntries(entries, overwrite ? occupied : []);
+    } catch (error) {
+      toast.error(error instanceof Error && error.message.includes("un'altra scheda")
+        ? error.message : "Impossibile precompilare il mese. Riprova.");
+      setSaving(false);
+      return;
+    }
+    setSaving(false);
     onSaved();
     onOpenChange(false);
     toast.success(`${entries.length} giorni precompilati${occupied.length && !overwrite ? `; ${occupied.length} già presenti non modificati` : ""}.`);
   };
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open={open} onOpenChange={(nextOpen) => { if (!saving) onOpenChange(nextOpen); }}>
       <DialogContent className="max-h-[92svh] overflow-y-auto rounded-2xl" data-testid="month-prefill-dialog">
         <DialogHeader><DialogTitle>Precompila mese</DialogTitle><p className="text-sm text-[#64748B]">Inserisci le ore ordinarie abituali in pochi tocchi.</p></DialogHeader>
         <div className="space-y-4">
@@ -87,7 +97,7 @@ export default function MonthPrefillDialog({ open, monthKey, initialDates, onOpe
           <div className="rounded-2xl bg-[#0F172A] p-4 text-white" data-testid="prefill-preview"><div className="flex gap-3"><CalendarRange className="h-5 w-5 text-[#38BDF8]" /><div><p className="font-extrabold">{datesToWrite.length} giorni da compilare</p><p className="text-sm text-[#CBD5E1]">{fmtHours(minutes)} al giorno · {fmtHours(minutes * datesToWrite.length)} ordinarie</p>{candidateDates.length > 0 && <p className="mt-1 text-xs text-[#94A3B8]">{fmtDateIt(candidateDates[0])} – {fmtDateIt(candidateDates.at(-1)!)}</p>}</div></div></div>
           {occupied.length > 0 && <div className="rounded-2xl border border-[#FDE68A] bg-[#FFFBEB] p-4"><div className="flex gap-3"><AlertTriangle className="h-5 w-5 shrink-0 text-[#D97706]" /><div><p className="font-extrabold text-[#92400E]">{occupied.length} giorni contengono già dati</p><p className="text-sm text-[#92400E]">Non saranno modificati senza conferma.</p></div></div><label className="mt-3 flex items-center gap-3 rounded-xl bg-white p-3 font-bold"><Checkbox checked={overwrite} onCheckedChange={(value) => setOverwrite(value === true)} />Sovrascrivi questi giorni</label></div>}
         </div>
-        <DialogFooter className="gap-2"><Button variant="outline" onClick={() => onOpenChange(false)}>Annulla</Button><Button data-testid="btn-confirm-month-prefill" disabled={datesToWrite.length === 0} onClick={save}><Check className="mr-2 h-4 w-4" />Precompila</Button></DialogFooter>
+        <DialogFooter className="gap-2"><Button variant="outline" disabled={saving} onClick={() => onOpenChange(false)}>Annulla</Button><Button data-testid="btn-confirm-month-prefill" disabled={saving || datesToWrite.length === 0} onClick={save}><Check className="mr-2 h-4 w-4" />Precompila</Button></DialogFooter>
       </DialogContent>
     </Dialog>
   );

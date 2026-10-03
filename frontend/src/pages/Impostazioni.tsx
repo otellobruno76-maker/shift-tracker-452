@@ -15,11 +15,12 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { fmtDateIt } from "@/lib/dates";
-import { exportBackupFile, importBackupFile } from "@/lib/export";
+import { exportBackupFile, readBackupFile } from "@/lib/export";
 import { nationalHolidays } from "@/lib/holidays";
-import { clearRegister, removeDemoData, resetJob, saveSettings, useDemoActive, useSettings } from "@/lib/store";
+import { clearRegister, importBackup, removeDemoData, resetJob, saveSettings, useDemoActive, useSettings } from "@/lib/store";
 import { MONTHS_IT } from "@/lib/types";
 import type { ReactNode } from "react";
+import type { Settings } from "@/lib/types";
 
 export default function Impostazioni() {
   const navigate = useNavigate();
@@ -31,6 +32,40 @@ export default function Impostazioni() {
   const [clearStep, setClearStep] = useState<1 | 2>(1);
   const [jobDialogOpen, setJobDialogOpen] = useState(false);
   const [deleteHours, setDeleteHours] = useState(false);
+  const [pendingBackup, setPendingBackup] = useState<unknown | null>(null);
+  const [importing, setImporting] = useState(false);
+  const [dataActionBusy, setDataActionBusy] = useState(false);
+
+  const saveSetting = (patch: Partial<Settings>) => {
+    void saveSettings(patch).catch(() => toast.error("Impossibile salvare le impostazioni. Riprova."));
+  };
+
+  const runDataAction = async (action: () => Promise<void>, onSuccess: () => void) => {
+    if (dataActionBusy) return;
+    setDataActionBusy(true);
+    try {
+      await action();
+      onSuccess();
+    } catch {
+      toast.error("Operazione non riuscita. I dati precedenti sono stati conservati.");
+    } finally {
+      setDataActionBusy(false);
+    }
+  };
+
+  const confirmImport = async () => {
+    if (pendingBackup === null || importing) return;
+    setImporting(true);
+    try {
+      await importBackup(pendingBackup);
+      setPendingBackup(null);
+      toast.success("Backup importato: dati sostituiti.");
+    } catch {
+      toast.error("Importazione non riuscita. I dati precedenti sono stati conservati.");
+    } finally {
+      setImporting(false);
+    }
+  };
 
   return (
     <div>
@@ -112,7 +147,7 @@ export default function Impostazioni() {
               toast.error("Le ore giornaliere non possono superare quelle settimanali.");
               return;
             }
-            saveSettings({ dailyOrdinaryHours: v });
+            return saveSettings({ dailyOrdinaryHours: v });
           }}
         />
         <NumberField
@@ -125,7 +160,7 @@ export default function Impostazioni() {
               toast.error("Le ore settimanali non possono essere meno di quelle giornaliere.");
               return;
             }
-            saveSettings({ weeklyOrdinaryHours: v });
+            return saveSettings({ weeklyOrdinaryHours: v });
           }}
         />
         <p className="text-xs text-[#64748B]">
@@ -223,7 +258,7 @@ export default function Impostazioni() {
         <label className="flex items-center gap-3 rounded-xl border border-[#E2E5EA] p-3">
           <Checkbox
             checked={settings.netEnabled}
-            onCheckedChange={(v) => saveSettings({ netEnabled: v === true })}
+            onCheckedChange={(v) => saveSetting({ netEnabled: v === true })}
             data-testid="settings-net-toggle"
             className="h-6 w-6"
           />
@@ -258,7 +293,7 @@ export default function Impostazioni() {
           <Label className="text-sm font-bold">Mese</Label>
           <Select
             value={settings.patronalMonth ? String(settings.patronalMonth) : "none"}
-            onValueChange={(v) => saveSettings({ patronalMonth: v === "none" ? null : Number(v) })}
+            onValueChange={(v) => saveSetting({ patronalMonth: v === "none" ? null : Number(v) })}
           >
             <SelectTrigger className="mt-1 h-12 w-full text-base" data-testid="settings-patronal-month">
               <SelectValue>
@@ -279,7 +314,7 @@ export default function Impostazioni() {
           <Label className="text-sm font-bold">Giorno</Label>
           <Select
             value={settings.patronalDay ? String(settings.patronalDay) : "none"}
-            onValueChange={(v) => saveSettings({ patronalDay: v === "none" ? null : Number(v) })}
+            onValueChange={(v) => saveSetting({ patronalDay: v === "none" ? null : Number(v) })}
           >
             <SelectTrigger className="mt-1 h-12 w-full text-base" data-testid="settings-patronal-day">
               <SelectValue>{(v) => (v === "none" ? "Nessuno" : String(v))}</SelectValue>
@@ -319,8 +354,9 @@ export default function Impostazioni() {
           className="h-14 w-full text-base font-extrabold"
           data-testid="btn-settings-backup-export"
           onClick={() => {
-            exportBackupFile();
-            toast.success("Backup scaricato.");
+            void exportBackupFile()
+              .then(() => toast.success("Backup scaricato."))
+              .catch(() => toast.error("Impossibile esportare il backup. Riprova."));
           }}
         >
           <Upload className="mr-2 h-5 w-5 rotate-180" />
@@ -336,10 +372,9 @@ export default function Impostazioni() {
             const file = e.target.files?.[0];
             e.target.value = "";
             if (!file) return;
-            void importBackupFile(file).then((ok) => {
-              if (ok) toast.success("Backup importato: dati sostituiti.");
-              else toast.error("File non valido: scegli un backup esportato dall'app.");
-            });
+            void readBackupFile(file)
+              .then(setPendingBackup)
+              .catch(() => toast.error("File non valido, incompleto o incompatibile. Scegli un backup esportato dall'app."));
           }}
         />
         <Button
@@ -356,10 +391,8 @@ export default function Impostazioni() {
             variant="outline"
             className="h-14 w-full border-[#FCD34D] bg-[#FFFBEB] text-base font-extrabold text-[#92400E] hover:bg-[#FEF3C7]"
             data-testid="btn-remove-demo-data-settings"
-            onClick={() => {
-              removeDemoData();
-              toast.success("Dati di prova rimossi: l'app è vuota.");
-            }}
+            disabled={dataActionBusy}
+            onClick={() => void runDataAction(removeDemoData, () => toast.success("Rimozione completata. I dati personali sono stati conservati."))}
           >
             <Trash2 className="mr-2 h-5 w-5" />
             Rimuovi dati di prova
@@ -383,17 +416,17 @@ export default function Impostazioni() {
         </p>
       </Section>
 
-      <Dialog open={clearDialogOpen} onOpenChange={(open) => { setClearDialogOpen(open); if (!open) setClearStep(1); }}>
+      <Dialog open={clearDialogOpen} onOpenChange={(open) => { if (dataActionBusy) return; setClearDialogOpen(open); if (!open) setClearStep(1); }}>
         <DialogContent className="rounded-2xl" data-testid="clear-register-dialog">
           <DialogHeader><DialogTitle>{clearStep === 1 ? "Azzerare tutto il registro ore?" : "Conferma definitiva"}</DialogTitle></DialogHeader>
           <p className="text-sm text-[#64748B]">{clearStep === 1 ? "Saranno eliminate tutte le giornate. Impostazioni, paga, CCNL e Giornate tipo resteranno salvati." : "Questa operazione elimina definitivamente tutte le giornate registrate. Vuoi procedere?"}</p>
           <DialogFooter className="gap-2">
-            <Button variant="outline" onClick={() => setClearDialogOpen(false)}>Annulla</Button>
-            {clearStep === 1 ? <Button variant="destructive" data-testid="btn-confirm-clear-register" onClick={() => setClearStep(2)}>Continua</Button> : <Button variant="destructive" data-testid="btn-confirm-clear-register-final" onClick={() => { clearRegister(); setClearDialogOpen(false); setClearStep(1); toast.success("Registro azzerato. Configurazioni mantenute."); }}>Azzera definitivamente</Button>}
+            <Button variant="outline" disabled={dataActionBusy} onClick={() => setClearDialogOpen(false)}>Annulla</Button>
+            {clearStep === 1 ? <Button variant="destructive" data-testid="btn-confirm-clear-register" onClick={() => setClearStep(2)}>Continua</Button> : <Button variant="destructive" disabled={dataActionBusy} data-testid="btn-confirm-clear-register-final" onClick={() => void runDataAction(clearRegister, () => { setClearDialogOpen(false); setClearStep(1); toast.success("Registro azzerato. Configurazioni mantenute."); })}>Azzera definitivamente</Button>}
           </DialogFooter>
         </DialogContent>
       </Dialog>
-      <Dialog open={jobDialogOpen} onOpenChange={setJobDialogOpen}>
+      <Dialog open={jobDialogOpen} onOpenChange={(open) => { if (!dataActionBusy) setJobDialogOpen(open); }}>
         <DialogContent className="rounded-2xl" data-testid="change-job-dialog">
           <DialogHeader><DialogTitle>Cambiare lavoro?</DialogTitle></DialogHeader>
           <p className="text-sm">Saranno eliminati tutti i cedolini, le analisi e i confronti salvati, insieme alla configurazione dell’azienda, del contratto e delle giornate tipo.</p>
@@ -402,7 +435,17 @@ export default function Impostazioni() {
             <label className="flex gap-2"><input type="radio" name="job-hours" checked={deleteHours} onChange={() => setDeleteHours(true)} /> Elimina anche lo storico ore</label>
           </fieldset>
           <p className="text-xs text-[#64748B]">Conferma esplicitamente: l’operazione non può essere annullata.</p>
-          <DialogFooter className="gap-2"><Button variant="outline" onClick={() => setJobDialogOpen(false)}>Annulla</Button><Button variant="destructive" data-testid="btn-confirm-change-job" onClick={() => { resetJob(deleteHours); setJobDialogOpen(false); toast.success(deleteHours ? "Lavoro e storico ore eliminati." : "Lavoro azzerato. Storico ore mantenuto."); }}>Conferma cambio lavoro</Button></DialogFooter>
+          <DialogFooter className="gap-2"><Button variant="outline" disabled={dataActionBusy} onClick={() => setJobDialogOpen(false)}>Annulla</Button><Button variant="destructive" disabled={dataActionBusy} data-testid="btn-confirm-change-job" onClick={() => void runDataAction(() => resetJob(deleteHours), () => { setJobDialogOpen(false); toast.success(deleteHours ? "Lavoro e storico ore eliminati." : "Lavoro azzerato. Storico ore mantenuto."); })}>Conferma cambio lavoro</Button></DialogFooter>
+        </DialogContent>
+      </Dialog>
+      <Dialog open={pendingBackup !== null} onOpenChange={(open) => { if (!open && !importing) setPendingBackup(null); }}>
+        <DialogContent className="rounded-2xl" data-testid="import-backup-confirm-dialog">
+          <DialogHeader><DialogTitle>Sostituire i dati con il backup?</DialogTitle></DialogHeader>
+          <p className="text-sm text-[#64748B]">Il file è stato verificato. L’importazione sostituirà giornate, impostazioni, giornate tipo e cedolini attualmente salvati su questo dispositivo.</p>
+          <DialogFooter className="gap-2">
+            <Button variant="outline" disabled={importing} onClick={() => setPendingBackup(null)}>Annulla</Button>
+            <Button data-testid="btn-confirm-import-backup" disabled={importing} onClick={() => void confirmImport()}>{importing ? "Importazione…" : "Sostituisci i dati"}</Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </div>
@@ -421,6 +464,55 @@ function Section({ title, children, testid }: { title: string; children: ReactNo
   );
 }
 
+function useEditableDraft(value: string) {
+  const [draft, setDraft] = useState(value);
+  const focused = useRef(false);
+  const generation = useRef(0);
+  const pending = useRef<number | null>(null);
+  const persisted = useRef(value);
+
+  useEffect(() => {
+    persisted.current = value;
+    if (!focused.current && pending.current === null) setDraft(value);
+  }, [value]);
+
+  const edit = (next: string) => {
+    setDraft(next);
+    const id = ++generation.current;
+    pending.current = id;
+    return id;
+  };
+
+  const settle = (id: number, result: Promise<void> | void, normalized: string) => {
+    if (!result) {
+      if (pending.current === id) {
+        pending.current = null;
+        setDraft(persisted.current);
+      }
+      return;
+    }
+    void result.then(() => {
+      if (pending.current !== id) return;
+      pending.current = null;
+      persisted.current = normalized;
+      if (!focused.current) setDraft(normalized);
+    }).catch(() => {
+      if (pending.current === id) {
+        pending.current = null;
+        setDraft(persisted.current);
+        toast.error("Salvataggio non riuscito. Il valore precedente è stato conservato.");
+      }
+    });
+  };
+
+  const onFocus = () => { focused.current = true; };
+  const onBlur = () => {
+    focused.current = false;
+    if (pending.current === null) setDraft(persisted.current);
+  };
+  return { draft, setDraft, edit, settle, onFocus, onBlur };
+}
+
 function TextField({
   label,
   value,
@@ -430,14 +522,11 @@ function TextField({
 }: {
   label: string;
   value: string;
-  onCommit: (v: string) => void;
+  onCommit: (v: string) => Promise<void> | void;
   placeholder?: string;
   testid: string;
 }) {
-  const [draft, setDraft] = useState(value);
-  useEffect(() => {
-    setDraft(value);
-  }, [value]);
+  const { draft, edit, settle, onFocus, onBlur } = useEditableDraft(value);
   return (
     <div>
       <Label htmlFor={testid} className="text-sm font-bold">
@@ -449,9 +538,12 @@ function TextField({
         placeholder={placeholder}
         value={draft}
         data-testid={testid}
+        onFocus={onFocus}
+        onBlur={onBlur}
         onChange={(e) => {
-          setDraft(e.target.value);
-          onCommit(e.target.value);
+          const next = e.target.value;
+          const id = edit(next);
+          settle(id, onCommit(next), next);
         }}
       />
     </div>
@@ -468,23 +560,20 @@ function NumberField({
 }: {
   label: string;
   value: number;
-  onCommit: (v: number) => void;
+  onCommit: (v: number) => Promise<void> | void;
   suffix?: string;
   testid: string;
   max?: number;
 }) {
-  const [draft, setDraft] = useState(String(value));
-  useEffect(() => {
-    setDraft(String(value));
-  }, [value]);
+  const { draft, setDraft, edit, settle, onFocus, onBlur } = useEditableDraft(String(value));
   const handle = (raw: string) => {
-    setDraft(raw);
     if (raw.trim() === "") {
-      onCommit(0);
+      const id = edit(raw);
+      settle(id, onCommit(0), "0");
       return;
     }
     const n = Number(raw.replace(",", "."));
-    if (Number.isNaN(n)) return;
+    if (Number.isNaN(n)) { setDraft(raw); return; }
     if (n < 0) {
       toast.error("Il valore non può essere negativo.");
       return;
@@ -493,7 +582,8 @@ function NumberField({
       toast.error(`Il valore non può superare ${max}.`);
       return;
     }
-    onCommit(n);
+    const id = edit(raw);
+    settle(id, onCommit(n), String(n));
   };
   return (
     <div>
@@ -507,6 +597,8 @@ function NumberField({
           className="h-12 pr-14 text-base"
           value={draft}
           data-testid={testid}
+          onFocus={onFocus}
+          onBlur={onBlur}
           onChange={(e) => handle(e.target.value)}
         />
         {suffix && (

@@ -43,6 +43,7 @@ export default function ConfiguraCedolino() {
   const payslips = usePayslips();
   const replaceId = params.get("replace");
   const replaced = payslips.find((item) => item.id === replaceId);
+  const replacedAtOpen = useRef(replaced ?? null);
   const fileRef = useRef<HTMLInputElement>(null);
   const [analysis, setAnalysis] = useState<PayslipAnalysis | null>(null);
   const [review, setReview] = useState<ReviewState | null>(null);
@@ -51,6 +52,8 @@ export default function ConfiguraCedolino() {
   const [error, setError] = useState("");
   const [filename, setFilename] = useState("");
   const [pendingSettings, setPendingSettings] = useState<Partial<typeof settings> | null>(null);
+  const [savingRecord, setSavingRecord] = useState(false);
+  const [savingSettings, setSavingSettings] = useState(false);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [aiConsentOpen, setAiConsentOpen] = useState(false);
   const [aiBusy, setAiBusy] = useState(false);
@@ -121,8 +124,8 @@ export default function ConfiguraCedolino() {
     }
   };
 
-  const confirm = () => {
-    if (!review || !analysis) return;
+  const confirm = async () => {
+    if (!review || !analysis || savingRecord) return;
     const detectedAnalysis = analysis;
     const chosen = review.selected;
     const hasValue = (key: keyof ReviewState) => String(review[key] ?? "").trim() !== "";
@@ -205,11 +208,35 @@ export default function ConfiguraCedolino() {
       uploadedAt: replaced?.uploadedAt ?? now,
       updatedAt: now,
     };
-    savePayslip(record);
+    setSavingRecord(true);
+    try {
+      await savePayslip(record, replacedAtOpen.current);
+    } catch (error) {
+      toast.error(error instanceof Error && (error.message.includes("un'altra scheda") || error.message.includes("Esiste già"))
+        ? error.message : "Impossibile salvare il cedolino. Riprova.");
+      setSavingRecord(false);
+      return;
+    }
+    setSavingRecord(false);
     const patch = buildPayslipSettingsPatch(values);
     const changed = Object.entries(patch).some(([key, value]) => key !== "payslipConfiguredAt" && JSON.stringify(settings[key as keyof typeof settings]) !== JSON.stringify(value));
     if (changed) setPendingSettings(patch);
     else { toast.success("Cedolino salvato nello storico."); navigate("/cedolini"); }
+  };
+
+  const applyPendingSettings = async () => {
+    if (!pendingSettings || savingSettings) return;
+    setSavingSettings(true);
+    try {
+      await saveSettings(pendingSettings);
+      setPendingSettings(null);
+      toast.success("Cedolino salvato e impostazioni aggiornate.");
+      navigate("/cedolini");
+    } catch {
+      toast.error("Impossibile aggiornare le impostazioni. Il cedolino rimane salvato.");
+    } finally {
+      setSavingSettings(false);
+    }
   };
 
   return (
@@ -306,6 +333,7 @@ export default function ConfiguraCedolino() {
             setConflicts([]);
           }}
           onConfirm={confirm}
+          saving={savingRecord}
         />
         </fieldset>
         </>
@@ -331,7 +359,7 @@ export default function ConfiguraCedolino() {
             {pendingSettings.ccnl !== undefined && pendingSettings.ccnl !== settings.ccnl && <p>CCNL: <b>{settings.ccnl || "non impostato"} → {pendingSettings.ccnl}</b></p>}
             {pendingSettings.contractLevel !== undefined && pendingSettings.contractLevel !== settings.contractLevel && <p>Livello: <b>{settings.contractLevel || "non impostato"} → {pendingSettings.contractLevel}</b></p>}
           </div>}
-          <DialogFooter className="gap-2"><Button variant="outline" data-testid="btn-keep-settings" onClick={() => { setPendingSettings(null); toast.success("Cedolino salvato. Impostazioni non modificate."); navigate("/cedolini"); }}>No, mantieni attuali</Button><Button data-testid="btn-update-settings" onClick={() => { if (pendingSettings) saveSettings(pendingSettings); setPendingSettings(null); toast.success("Cedolino salvato e impostazioni aggiornate."); navigate("/cedolini"); }}>Sì, aggiorna</Button></DialogFooter>
+          <DialogFooter className="gap-2"><Button variant="outline" disabled={savingSettings} data-testid="btn-keep-settings" onClick={() => { setPendingSettings(null); toast.success("Cedolino salvato. Impostazioni non modificate."); navigate("/cedolini"); }}>No, mantieni attuali</Button><Button data-testid="btn-update-settings" disabled={savingSettings} onClick={() => void applyPendingSettings()}>Sì, aggiorna</Button></DialogFooter>
         </DialogContent>
       </Dialog>
     </div>
@@ -346,6 +374,7 @@ function Review({
   onCancel,
   onReplace,
   onConfirm,
+  saving,
 }: {
   analysis: PayslipAnalysis;
   review: ReviewState;
@@ -354,6 +383,7 @@ function Review({
   onCancel: () => void;
   onReplace: () => void;
   onConfirm: () => void;
+  saving: boolean;
 }) {
   const updateValue = (key: "qualification" | "contractCode" | "partTimePct" | "basePay" | "dailyPay" | "monthlyPay" | "ordinaryHours" | "dailyOrdinaryHours" | "workedHours" | "workedDays" | "totalElementsPay" | "grossTotal" | "netTotal" | "overtimeHours" | "overtimeTariffs" | "overtimeRates" | "nightPct" | "holidayPct" | "ccnl" | "level", value: string) => onChange(updateReviewValue(review, key, value));
   const updateSelected = (key: string, value: boolean) => onChange({ ...review, selected: { ...review.selected, [key]: value } });
@@ -439,7 +469,7 @@ function Review({
       <section className="rounded-2xl border border-[#E2E5EA] bg-white p-4 shadow-sm"><h2 className="font-extrabold">Totali rilevabili</h2>{review.totals.length === 0 ? <p className="mt-2 text-sm text-[#64748B]">Non rilevati</p> : <div className="mt-2 space-y-1">{review.totals.map((total, index) => <p key={index} className="text-sm">{total.label}: <b>{total.value.toLocaleString("it-IT")}</b></p>)}</div>}</section>
 
       <div className="space-y-2">
-        <Button className="h-14 w-full text-base font-extrabold" data-testid="btn-apply-payslip" onClick={onConfirm}>Salva cedolino</Button>
+        <Button className="h-14 w-full text-base font-extrabold" data-testid="btn-apply-payslip" disabled={saving} onClick={onConfirm}>Salva cedolino</Button>
         <Button variant="outline" className="h-12 w-full" onClick={onReplace}>Scegli un altro documento</Button>
         <Button variant="ghost" className="h-12 w-full" data-testid="btn-cancel-payslip" onClick={onCancel}>Annulla senza modificare</Button>
       </div>

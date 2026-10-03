@@ -36,6 +36,7 @@ export default function BulkDaysDialog({ open, dates, onOpenChange, onSaved }: P
   const [breakMinutes, setBreakMinutes] = useState("60");
   const [absenceType, setAbsenceType] = useState<DayType>("ferie");
   const [overwrite, setOverwrite] = useState(false);
+  const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     if (!open) return;
@@ -89,10 +90,19 @@ export default function BulkDaysDialog({ open, dates, onOpenChange, onSaved }: P
     return true;
   };
 
-  const save = () => {
+  const save = async () => {
     if (!validate() || !values) return;
     const entries = buildBulkEntries(datesToWrite, values);
-    applyBulkEntries(entries, overwrite ? occupiedDates : []);
+    setSaving(true);
+    try {
+      await applyBulkEntries(entries, overwrite ? occupiedDates : []);
+    } catch (error) {
+      toast.error(error instanceof Error && error.message.includes("un'altra scheda")
+        ? error.message : "Impossibile salvare i giorni selezionati. Riprova.");
+      setSaving(false);
+      return;
+    }
+    setSaving(false);
     onSaved();
     onOpenChange(false);
     const skipped = dates.length - datesToWrite.length;
@@ -106,7 +116,7 @@ export default function BulkDaysDialog({ open, dates, onOpenChange, onSaved }: P
     : values ? DAY_TYPE_LABELS[values.dayType] : "Da configurare";
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open={open} onOpenChange={(nextOpen) => { if (!saving) onOpenChange(nextOpen); }}>
       <DialogContent className="max-h-[92svh] overflow-y-auto rounded-2xl" data-testid="bulk-days-dialog">
         <DialogHeader>
           <DialogTitle>{step === "edit" ? "Compila i giorni selezionati" : "Anteprima prima di salvare"}</DialogTitle>
@@ -176,8 +186,8 @@ export default function BulkDaysDialog({ open, dates, onOpenChange, onSaved }: P
         )}
 
         <DialogFooter className="gap-2">
-          {step === "preview" ? <Button variant="outline" onClick={() => setStep("edit")}><ArrowLeft className="mr-2 h-4 w-4" />Indietro</Button> : <Button variant="outline" onClick={() => onOpenChange(false)}>Annulla</Button>}
-          {step === "edit" ? <Button data-testid="btn-show-bulk-preview" onClick={() => validate() && setStep("preview")}>Mostra anteprima</Button> : <Button data-testid="btn-save-bulk-days" disabled={datesToWrite.length === 0} onClick={save}><Check className="mr-2 h-4 w-4" />Conferma e salva</Button>}
+          {step === "preview" ? <Button variant="outline" disabled={saving} onClick={() => setStep("edit")}><ArrowLeft className="mr-2 h-4 w-4" />Indietro</Button> : <Button variant="outline" disabled={saving} onClick={() => onOpenChange(false)}>Annulla</Button>}
+          {step === "edit" ? <Button data-testid="btn-show-bulk-preview" onClick={() => validate() && setStep("preview")}>Mostra anteprima</Button> : <Button data-testid="btn-save-bulk-days" disabled={saving || datesToWrite.length === 0} onClick={save}><Check className="mr-2 h-4 w-4" />Conferma e salva</Button>}
         </DialogFooter>
       </DialogContent>
     </Dialog>

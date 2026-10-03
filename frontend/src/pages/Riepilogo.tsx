@@ -219,8 +219,9 @@ export default function Riepilogo() {
                 className="h-14 text-base font-extrabold"
                 data-testid="btn-export-backup"
                 onClick={() => {
-                  exportBackupFile();
-                  toast.success("Backup scaricato.");
+                  void exportBackupFile()
+                    .then(() => toast.success("Backup scaricato."))
+                    .catch(() => toast.error("Impossibile esportare il backup. Riprova."));
                 }}
               >
                 <Archive className="mr-2 h-5 w-5" />

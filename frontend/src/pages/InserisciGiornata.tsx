@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import {
   BedDouble,
@@ -89,9 +89,9 @@ function FormBody({
 
   const source = (editId ? days.find((d) => d.id === editId) : undefined) ??
     (copiaId ? days.find((d) => d.id === copiaId) : undefined);
+  const sourceAtOpen = useRef<DayEntry | null>(editId ? source ?? null : null);
 
   const [date, setDate] = useState(source?.date ?? prefillDate ?? `${getActiveMonth()}-01`);
-  useEffect(() => { if (date) setActiveMonth(date.slice(0, 7)); }, [date]);
   const [dayType, setDayType] = useState<DayType>(source?.dayType ?? "lavoro");
   const [start, setStart] = useState(source?.start ?? "");
   const [end, setEnd] = useState(source?.end ?? "");
@@ -113,6 +113,8 @@ function FormBody({
   const [scheduledOvertime, setScheduledOvertime] = useState(String((source?.manualOvertimeMinutes ?? 0) / 60));
   const [templateDialogOpen, setTemplateDialogOpen] = useState(false);
   const [templateName, setTemplateName] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [savingTemplate, setSavingTemplate] = useState(false);
 
   const breakMinutes =
     breakChoice === "custom" ? (Number(breakCustom.replace(",", ".")) || 0) : Number(breakChoice);
@@ -166,7 +168,8 @@ function FormBody({
     setTemplateDialogOpen(true);
   };
 
-  const persistTemplate = () => {
+  const persistTemplate = async () => {
+    if (savingTemplate) return;
     const name = templateName.trim();
     if (!name) {
       toast.error("Dai un nome alla giornata tipo.");
@@ -174,7 +177,9 @@ function FormBody({
     }
     const now = new Date().toISOString();
     const existing = templates.find((item) => item.name.toLocaleLowerCase("it") === name.toLocaleLowerCase("it"));
-    saveDayTemplate({
+    setSavingTemplate(true);
+    try {
+      await saveDayTemplate({
       id: existing?.id ?? uid(),
       name,
       dayType,
@@ -187,12 +192,18 @@ function FormBody({
       note: note.trim(),
       createdAt: existing?.createdAt ?? now,
       updatedAt: now,
-    });
-    setTemplateDialogOpen(false);
-    toast.success(existing ? "Giornata tipo aggiornata." : "Giornata tipo salvata.");
+      });
+      setTemplateDialogOpen(false);
+      toast.success(existing ? "Giornata tipo aggiornata." : "Giornata tipo salvata.");
+    } catch {
+      toast.error("Impossibile salvare la giornata tipo. Riprova.");
+    } finally {
+      setSavingTemplate(false);
+    }
   };
 
-  const save = () => {
+  const save = async () => {
+    if (saving) return;
     if (!date) {
       toast.error("Scegli la data della giornata.");
       return;
@@ -255,12 +266,21 @@ function FormBody({
       createdAt: source && editId ? source.createdAt : now,
       updatedAt: now,
     };
-    saveEntry(entry);
-    setActiveMonth(date.slice(0, 7));
-    toast.success(editId ? "Giornata aggiornata." : "Giornata salvata.");
-    original.current = snapshot;
-    navigate(`/inserisci?id=${encodeURIComponent(entry.id)}`, { replace: true });
-    window.scrollTo({ top: 0, behavior: "auto" });
+    setSaving(true);
+    try {
+      await saveEntry(entry, editId ? sourceAtOpen.current : undefined);
+      setActiveMonth(date.slice(0, 7));
+      toast.success(editId ? "Giornata aggiornata." : "Giornata salvata.");
+      original.current = snapshot;
+      navigate(`/inserisci?id=${encodeURIComponent(entry.id)}`, { replace: true });
+      window.scrollTo({ top: 0, behavior: "auto" });
+    } catch (error) {
+      toast.error(error instanceof Error && error.message.includes("un'altra scheda")
+        ? error.message
+        : "Impossibile salvare la giornata. I dati precedenti sono stati conservati.");
+    } finally {
+      setSaving(false);
+    }
   };
 
   return (
@@ -345,8 +365,9 @@ function FormBody({
                   aria-label={`Elimina ${template.name}`}
                   data-testid={`delete-day-template-${template.id}`}
                   onClick={() => {
-                    deleteDayTemplate(template.id);
-                    toast.success("Giornata tipo eliminata.");
+                    void deleteDayTemplate(template.id)
+                      .then(() => toast.success("Giornata tipo eliminata."))
+                      .catch(() => toast.error("Impossibile eliminare la giornata tipo. Riprova."));
                   }}
                 >
                   <Trash2 className="h-4 w-4" />
@@ -611,6 +632,7 @@ function FormBody({
           <Button
             className="h-16 flex-[2] text-lg font-extrabold"
             data-testid="btn-save-entry"
+            disabled={saving}
             onClick={save}
           >
             Salva giornata
@@ -645,7 +667,7 @@ function FormBody({
             <Button type="button" variant="outline" onClick={() => setTemplateDialogOpen(false)}>
               Annulla
             </Button>
-            <Button type="button" data-testid="btn-confirm-save-template" onClick={persistTemplate}>
+            <Button type="button" data-testid="btn-confirm-save-template" disabled={savingTemplate} onClick={() => void persistTemplate()}>
               Salva
             </Button>
           </DialogFooter>

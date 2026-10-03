@@ -126,7 +126,10 @@ export default function Calendario() {
             className="mt-1 h-11 w-full text-sm font-bold text-[#B45309]"
             data-testid="btn-undo-last-bulk"
             onClick={() => {
-              if (undoLastBulkOperation()) toast.success("Ultima compilazione annullata.");
+              void undoLastBulkOperation()
+                .then((undone) => { if (undone) toast.success("Ultima compilazione annullata."); })
+                .catch((error) => toast.error(error instanceof Error && error.message.includes("un'altra scheda")
+                  ? error.message : "Impossibile annullare l’ultima operazione. Riprova."));
             }}
           >
             <RotateCcw className="mr-2 h-4 w-4" />
