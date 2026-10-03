@@ -7,7 +7,7 @@ export interface ComparisonRow {
   label: string;
   registerValue: number | null;
   payslipValue: number | null;
-  unit: "h" | "giorni" | "€" | "%";
+  unit: "h" | "giorni" | "€" | "%" | "€/h" | "€/mese";
   difference: number | null;
   status: ComparisonStatus;
   explanation: string;
@@ -18,14 +18,6 @@ export interface ComparisonRow {
 }
 
 const round = (value: number) => Math.round(value * 100) / 100;
-const sum = (items: PayslipItem[], category: PayslipItem["category"], unit: PayslipItem["unit"]): number | null => {
-  const values = items.filter((item) => item.category === category && item.unit === unit && item.quantity !== null && item.confidence !== "bassa");
-  return values.length ? round(values.reduce((total, item) => total + (item.quantity ?? 0), 0)) : null;
-};
-const sumAmounts = (items: PayslipItem[], category: PayslipItem["category"]): number | null => {
-  const values = items.filter((item) => item.category === category && item.amount !== null && item.confidence !== "bassa");
-  return values.length ? round(values.reduce((total, item) => total + (item.amount ?? 0), 0)) : null;
-};
 const descriptions = (items: PayslipItem[], category: PayslipItem["category"]): string | undefined => {
   const labels = [...new Set(items.filter((item) => item.category === category && item.confidence !== "bassa").map((item) => item.originalDescription).filter(Boolean))];
   return labels.length ? labels.join(" · ") : undefined;
@@ -41,24 +33,36 @@ function compare(
   sourceDescription?: string,
   missingReason?: string,
 ): ComparisonRow {
-  if (registerValue === null || payslipValue === null) {
-    return { key, label, registerValue, payslipValue, unit, difference: null, status: "insufficiente", sourceDescription,
-      explanation: `Non calcolabile automaticamente: ${missingReason ?? (payslipValue === null ? `nel cedolino manca la quantità esplicita di ${label.toLowerCase()}` : `nel registro manca il valore atteso di ${label.toLowerCase()}`)}.` };
+  const validRegister = registerValue !== null && Number.isFinite(registerValue) ? registerValue : null;
+  const validPayslip = payslipValue !== null && Number.isFinite(payslipValue) ? payslipValue : null;
+  if (validRegister === null || validPayslip === null) {
+    const reason = missingReason ?? (validPayslip === null
+      ? `nel cedolino manca un valore verificabile di ${label.toLowerCase()}`
+      : `nel registro manca un valore verificabile di ${label.toLowerCase()}`);
+    return { key, label, registerValue: validRegister, payslipValue: validPayslip, unit, difference: null, status: "insufficiente", sourceDescription, missingReason,
+      explanation: `Non calcolabile automaticamente: ${reason}.` };
   }
-  const difference = round(registerValue - payslipValue);
+  const difference = round(validRegister - validPayslip);
   if (Math.abs(difference) <= tolerance) {
-    return { key, label, registerValue, payslipValue, unit, difference, status: "coerente", sourceDescription,
+    return { key, label, registerValue: validRegister, payslipValue: validPayslip, unit, difference, status: "coerente", sourceDescription,
       explanation: "I valori risultano coerenti considerando i normali arrotondamenti." };
   }
-  return { key, label, registerValue, payslipValue, unit, difference, status: "differenza", sourceDescription,
+  return { key, label, registerValue: validRegister, payslipValue: validPayslip, unit, difference, status: "differenza", sourceDescription,
     explanation: `Scostamento di ${Math.abs(difference).toLocaleString("it-IT")} ${unit} oltre la tolleranza di ${tolerance.toLocaleString("it-IT")} ${unit}; controlla la voce e il periodo indicato.` };
 }
 
 function explicitAmount(record: PayslipRecord, pattern: RegExp): number | null {
   const items = (record.items ?? []).filter((item) => item.confidence !== "bassa" && pattern.test(item.originalDescription) && item.amount !== null);
-  if (items.length) return round(items.reduce((sum, item) => sum + (item.amount ?? 0), 0));
+  if (items.length) {
+    const explicitTotals = items.filter((item) => /\btotale\b/i.test(item.originalDescription));
+    if (explicitTotals.length) {
+      const values = explicitTotals.map((item) => item.amount as number);
+      return values.every((value) => Math.abs(value - values[0]) <= 0.01) ? round(values[0]) : null;
+    }
+    return round(items.reduce((sum, item) => sum + (item.amount ?? 0), 0));
+  }
   const totals = record.totals.filter((item) => pattern.test(item.label));
-  return totals.length ? round(totals.reduce((sum, item) => sum + item.value, 0)) : null;
+  return totals.length && totals.every((item) => Math.abs(item.value - totals[0].value) <= 0.01) ? round(totals[0].value) : null;
 }
 
 function fiscalRows(record: PayslipRecord): ComparisonRow[] {
@@ -67,15 +71,22 @@ function fiscalRows(record: PayslipRecord): ComparisonRow[] {
   const previdentialBase = explicitAmount(record, /imponibile\s+(previdenziale|inps|contributivo)/i);
   const fiscalBase = explicitAmount(record, /imponibile\s+(fiscale|irpef)/i);
   const contributions = items.filter((item) => /contribut[oi]|\binps\b/i.test(item.originalDescription) && !/imponibile/i.test(item.originalDescription) && item.amount !== null);
-  const contributionValue = contributions.length ? round(contributions.reduce((sum, item) => sum + (item.amount ?? 0), 0)) : explicitAmount(record, /(?:contribut[oi]|\binps\b)(?!.*imponibile)/i);
+  const totalContributionPattern = /totale\s+(?:contribut[oi]|inps)|(?:contribut[oi]|inps)\s+totale/i;
+  const hasTotalContribution = contributions.some((item) => totalContributionPattern.test(item.originalDescription))
+    || record.totals.some((item) => totalContributionPattern.test(item.label));
+  const componentContributions = contributions.filter((item) => !totalContributionPattern.test(item.originalDescription));
+  const contributionValue = hasTotalContribution ? explicitAmount(record, totalContributionPattern)
+    : componentContributions.length ? round(componentContributions.reduce((sum, item) => sum + (item.amount ?? 0), 0))
+      : explicitAmount(record, /(?:contribut[oi]|\binps\b)(?!.*imponibile)/i);
   if (previdentialBase !== null) rows.push(compare("previdentialBase", "Imponibile previdenziale", null, previdentialBase, "€", 0.05, undefined, "manca il dettaglio completo delle voci soggette a contributi"));
   if (fiscalBase !== null) rows.push(compare("fiscalBase", "Imponibile fiscale", null, fiscalBase, "€", 0.05, undefined, "manca il dettaglio completo delle voci fiscalmente imponibili"));
-  const rated = contributions.filter((item) => item.ratePct !== null);
+  const rated = componentContributions.filter((item) => item.ratePct !== null);
   const contributionBase = previdentialBase ?? (rated.length === 1 && rated[0].unit === "euro" ? rated[0].quantity : null);
-  if (contributionBase !== null || contributionValue !== null) {
+  if (contributionBase !== null || contributionValue !== null || hasTotalContribution) {
     rows.push(compare("contributions", "Contributi previdenziali", null, contributionValue, "€", 0.05, undefined,
-      contributionBase === null ? "manca l’imponibile previdenziale esplicito" : "manca l’aliquota contributiva esplicita"));
-    if (contributionBase !== null && rated.length === 1 && contributions.length === 1 && rated[0].ratePct !== null) {
+      hasTotalContribution && contributionValue === null ? "i totali dei contributi sono discordanti"
+        : contributionBase === null ? "manca l’imponibile previdenziale esplicito" : "manca l’aliquota contributiva esplicita"));
+    if (!hasTotalContribution && contributionBase !== null && rated.length === 1 && componentContributions.length === 1 && rated[0].ratePct !== null) {
       rows[rows.length - 1] = compare("contributions", "Contributi previdenziali", round(contributionBase * rated[0].ratePct / 100), contributionValue, "€", 0.05, rated[0].originalDescription);
     }
   }
@@ -91,76 +102,122 @@ function fiscalRows(record: PayslipRecord): ComparisonRow[] {
     if (amount !== null) rows.push(compare(key, label, null, amount, "€", 0.05, undefined,
       fiscalBase === null ? "manca l’imponibile fiscale esplicito" : "mancano aliquota, acconti e rate applicate espliciti"));
   }
-  const gross = record.grossTotal ?? explicitAmount(record, /totale\s+competenze|lordo/i);
+  // I totali confermati dall'utente sono autorevoli: null significa anche esclusi.
+  const gross = record.grossTotal ?? null;
   const withheld = explicitAmount(record, /totale\s+(ritenute|trattenute)/i);
-  const net = record.netTotal ?? explicitAmount(record, /netto\s+(?:a\s+)?pagare/i);
+  const net = record.netTotal ?? null;
   if (net !== null) rows.push(compare("netArithmetic", "Netto matematico", gross !== null && withheld !== null ? round(gross - withheld) : null, net, "€", 0.05, undefined,
     gross === null ? "manca il totale competenze esplicito" : "manca il totale trattenute esplicito"));
   return rows;
 }
 
-function quantity(record: PayslipRecord, category: PayslipItem["category"], preferred: "hours" | "days", dailyHours: number): number | null {
-  const items = record.items ?? [];
-  const direct = sum(items, category, preferred);
-  if (direct !== null) return direct;
-  const alternative = sum(items, category, preferred === "hours" ? "days" : "hours");
-  if (alternative === null || dailyHours <= 0) return null;
-  return preferred === "hours" ? round(alternative * dailyHours) : round(alternative / dailyHours);
+interface QuantityResult {
+  value: number | null;
+  missingReason?: string;
+}
+
+function quantity(record: PayslipRecord, category: PayslipItem["category"], preferred: "hours" | "days", dailyHours: number): QuantityResult {
+  const categoryItems = (record.items ?? []).filter((item) => item.category === category);
+  if (categoryItems.some((item) => item.quantity === null)) {
+    return { value: null, missingReason: "una o più voci del cedolino non hanno una quantità esplicita" };
+  }
+  const items = categoryItems.filter((item): item is PayslipItem & { quantity: number } => item.quantity !== null);
+  if (!items.length) return { value: null };
+  if (items.some((item) => !Number.isFinite(item.quantity))) {
+    return { value: null, missingReason: "una o più quantità del cedolino non sono numeri verificabili" };
+  }
+  if (items.some((item) => item.confidence === "bassa")) {
+    return { value: null, missingReason: "una o più quantità del cedolino hanno affidabilità bassa" };
+  }
+  if (items.some((item) => item.unit !== "hours" && item.unit !== "days")) {
+    return { value: null, missingReason: "l’unità della quantità nel cedolino non è compatibile con ore o giorni" };
+  }
+  const needsConversion = items.some((item) => item.unit !== preferred);
+  // Le giornate di lavoro festivo o notturno non attestano quante ore siano state lavorate.
+  const canConvert = category === "vacation" || category === "permission" || category === "sickness"
+    || category === "rol" || category === "former_holiday" || category === "absence";
+  if (needsConversion && (!canConvert || !Number.isFinite(dailyHours) || dailyHours <= 0)) {
+    return { value: null, missingReason: canConvert
+      ? "mancano le ore ordinarie giornaliere necessarie per convertire ore e giorni"
+      : "i giorni indicati nel cedolino non determinano le ore effettive di lavoro" };
+  }
+  const total = items.reduce((value, item) => value + (item.unit === preferred ? item.quantity : preferred === "hours" ? item.quantity * dailyHours : item.quantity / dailyHours), 0);
+  return { value: round(total) };
 }
 
 export function compareMonthWithPayslip(totals: Totals, record: PayslipRecord, settings: Settings): ComparisonRow[] {
   const hours = (minutes: number) => round(minutes / 60);
   const daily = settings.dailyOrdinaryHours;
+  const quantityRow = (key: string, label: string, registerValue: number, category: PayslipItem["category"], preferred: "hours" | "days", tolerance: number): ComparisonRow => {
+    const extracted = quantity(record, category, preferred, daily);
+    return compare(key, label, registerValue, extracted.value, preferred === "hours" ? "h" : "giorni", tolerance,
+      descriptions(record.items ?? [], category), extracted.missingReason);
+  };
   const rows: ComparisonRow[] = [
     compare("workedDays", "Giorni lavorati", totals.workDays, record.workedDays ?? null, "giorni", 0.01),
     compare("ordinary", "Ore ordinarie", hours(totals.ordinaryMinutes), record.ordinaryHours, "h", 0.1),
     compare("total", "Ore totali", hours(totals.netMinutes), record.workedHours ?? null, "h", 0.1),
     compare("overtime", "Straordinari", hours(totals.overtimeMinutes), record.overtimeHours ?? null, "h", 0.1),
-    compare("holiday", "Lavoro festivo", hours(totals.holidayMinutes), quantity(record, "holiday", "hours", daily), "h", 0.1),
-    compare("night", "Lavoro notturno", hours(totals.nightMinutes), quantity(record, "night", "hours", daily), "h", 0.1),
-    compare("vacation", "Ferie", totals.ferieDays, quantity(record, "vacation", "days", daily), "giorni", 0.01),
-    compare("permission", "Permessi", totals.permessiDays, quantity(record, "permission", "days", daily), "giorni", 0.01),
-    compare("sickness", "Malattia", totals.malattiaDays, quantity(record, "sickness", "days", daily), "giorni", 0.01),
-    compare("rol", "ROL", totals.rolDays, quantity(record, "rol", "days", daily), "giorni", 0.01, descriptions(record.items ?? [], "rol")),
-    compare("formerHoliday", "Ex festività", totals.exFestivitaDays, quantity(record, "former_holiday", "days", daily), "giorni", 0.01, descriptions(record.items ?? [], "former_holiday")),
+    quantityRow("holiday", "Lavoro festivo", hours(totals.holidayMinutes), "holiday", "hours", 0.1),
+    quantityRow("night", "Lavoro notturno", hours(totals.nightMinutes), "night", "hours", 0.1),
+    quantityRow("vacation", "Ferie", totals.ferieDays, "vacation", "days", 0.01),
+    quantityRow("permission", "Permessi", totals.permessiDays, "permission", "days", 0.01),
+    quantityRow("sickness", "Malattia", totals.malattiaDays, "sickness", "days", 0.01),
+    quantityRow("rol", "ROL", totals.rolDays, "rol", "days", 0.01),
+    quantityRow("formerHoliday", "Ex festività", totals.exFestivitaDays, "former_holiday", "days", 0.01),
   ];
-  if (settings.basePay > 0 || record.basePay !== null) rows.push(compare("basePay", "Paga oraria di riferimento", settings.basePay > 0 ? settings.basePay : null, record.basePay, "€", 0.01));
-  if (settings.monthlyReferencePay > 0 || (record.monthlyPay ?? null) !== null) rows.push(compare("monthlyPay", "Retribuzione mensile di riferimento", settings.monthlyReferencePay > 0 ? settings.monthlyReferencePay : null, record.monthlyPay ?? null, "€", 0.01));
+  if (settings.basePay > 0 || record.basePay !== null) rows.push(compare("basePay", "Paga oraria di riferimento", settings.basePay > 0 ? settings.basePay : null, record.basePay, "€/h", 0.01));
+  if (settings.monthlyReferencePay > 0 || (record.monthlyPay ?? null) !== null) rows.push(compare("monthlyPay", "Retribuzione mensile di riferimento", settings.monthlyReferencePay > 0 ? settings.monthlyReferencePay : null, record.monthlyPay ?? null, "€/mese", 0.01));
   const recordOvertimeRates = record.overtimeRates ?? [];
-  if (settings.overtimePct > 0 || recordOvertimeRates.length > 0) rows.push(compare("overtimeRate", "Maggiorazione straordinario", settings.overtimePct > 0 ? settings.overtimePct : null, recordOvertimeRates[0] ?? null, "%", 0.01));
-  const overtimeItems = (record.items ?? []).filter((item) => item.category === "overtime" && item.ratePct !== null && item.quantity !== null && item.confidence !== "bassa");
-  const uniqueOvertimeRates = new Set(overtimeItems.map((item) => item.ratePct));
+  if (settings.overtimePct > 0 || recordOvertimeRates.length > 0) rows.push(compare(
+    "overtimeRate", "Maggiorazione straordinario", settings.overtimePct > 0 ? settings.overtimePct : null,
+    recordOvertimeRates.length === 1 ? recordOvertimeRates[0] : null, "%", 0.01, undefined,
+    recordOvertimeRates.length > 1 ? "il cedolino indica più aliquote e non è nota la ripartizione delle ore" : undefined,
+  ));
+  const allOvertimeItems = (record.items ?? []).filter((item) => item.category === "overtime");
+  const overtimeItems = allOvertimeItems.filter((item) => item.ratePct !== null && item.quantity !== null && item.confidence !== "bassa");
   for (const [index, item] of overtimeItems.entries()) {
-    const canMatchAllRegisteredOvertime = uniqueOvertimeRates.size === 1 && settings.overtimePct === item.ratePct;
-    rows.push(compare(`overtime-${item.ratePct}-${index}`, `Straordinario +${item.ratePct}%`, canMatchAllRegisteredOvertime ? hours(totals.overtimeMinutes) : null, item.quantity, item.unit === "days" ? "giorni" : "h", 0.1, item.originalDescription));
+    const canMatchAllRegisteredOvertime = allOvertimeItems.length === 1
+      && settings.overtimePct === item.ratePct && item.unit === "hours";
+    const unit = item.unit === "days" ? "giorni" : item.unit === "euro" ? "€" : item.unit === "percent" ? "%" : "h";
+    rows.push(compare(`overtime-${item.ratePct}-${index}`, `Straordinario +${item.ratePct}%`,
+      canMatchAllRegisteredOvertime ? hours(totals.overtimeMinutes) : null,
+      item.unit === "unknown" ? null : item.quantity, unit, 0.1, item.originalDescription,
+      item.unit !== "hours" ? "la quantità di straordinario non è espressa in ore verificabili"
+        : "non è possibile attribuire tutte le ore registrate a questa singola voce e aliquota"));
   }
 
   const items = record.items ?? [];
   const absence = quantity(record, "absence", "days", daily);
-  if (absence !== null) rows.push(compare("otherAbsence", "Altre assenze", null, absence, "giorni", 0.01, descriptions(items, "absence")));
+  if (absence.value !== null || absence.missingReason) rows.push(compare("otherAbsence", "Altre assenze", null, absence.value, "giorni", 0.01, descriptions(items, "absence"), absence.missingReason));
 
   const allowanceItems = items.filter((item) => item.category === "allowance" && item.amount !== null && item.confidence !== "bassa");
+  const standbyItems = items.filter((item) => item.category === "allowance" && /reperibil/i.test(item.originalDescription));
   for (const [index, item] of allowanceItems.entries()) {
     const isStandby = /reperibil/i.test(item.originalDescription);
-    rows.push(compare(`allowance-${index}`, item.originalDescription || "Indennità", isStandby && totals.reperibilitaDays > 0 ? totals.pay.standbyAllowance : null, item.amount, "€", 0.01, item.originalDescription));
+    const coversRegisteredDays = item.unit === "days" && item.quantity === totals.reperibilitaDays;
+    const isExplicitTotal = /totale\s+.*reperibil|reperibil.*\s+totale/i.test(item.originalDescription);
+    const canMatchStandbyTotal = isStandby && standbyItems.length === 1 && totals.reperibilitaDays > 0
+      && settings.reperibilitaEuroPerDay > 0 && (coversRegisteredDays || isExplicitTotal);
+    rows.push(compare(`allowance-${index}`, item.originalDescription || "Indennità", canMatchStandbyTotal ? totals.pay.standbyAllowance : null, item.amount, "€", 0.01, item.originalDescription));
   }
 
   const appGross = settings.basePay > 0 ? totals.pay.total : null;
-  const payslipGross = record.grossTotal ?? sumAmounts(items, "gross") ?? sumAmounts(items, "earnings");
+  const payslipGross = record.grossTotal ?? null;
   if (appGross !== null || payslipGross !== null) {
     rows.push({ ...compare("gross", "Lordo / totale competenze", appGross, payslipGross, "€", 0.05, descriptions(items, "gross") ?? descriptions(items, "earnings")), registerLabel: "Stima dell’app", payslipLabel: "Importo letto nel cedolino" });
   }
   const appDeductions = settings.basePay > 0 && totals.pay.netEnabled ? round(totals.pay.total - totals.pay.net) : null;
-  const payslipDeductions = sumAmounts(items, "deductions") ?? record.totals.find((item) => /ritenut|trattenut/i.test(item.label))?.value ?? null;
+  const payslipDeductions = explicitAmount(record, /totale\s+(?:ritenute|trattenute)/i);
   if (appDeductions !== null || payslipDeductions !== null) {
     rows.push({ ...compare("deductions", "Totale trattenute", appDeductions, payslipDeductions, "€", 0.05, descriptions(items, "deductions")), registerLabel: "Stima dell’app", payslipLabel: "Importo letto nel cedolino" });
   }
   const appNet = settings.basePay > 0 && totals.pay.netEnabled ? totals.pay.net : null;
-  const payslipNet = record.netTotal ?? sumAmounts(items, "net");
+  const payslipNet = record.netTotal ?? null;
   if (appNet !== null || payslipNet !== null) {
     rows.push({ ...compare("net", "Netto", appNet, payslipNet, "€", 0.05, descriptions(items, "net")), registerLabel: "Stima dell’app", payslipLabel: "Importo letto nel cedolino" });
   }
-  return [...rows, ...fiscalRows(record)].filter((row) => row.registerValue !== null && row.registerValue !== 0 || row.payslipValue !== null);
+  return [...rows, ...fiscalRows(record)].filter((row) => row.registerValue !== null && row.registerValue !== 0 || row.payslipValue !== null || row.missingReason !== undefined);
 }
 
 export function periodMatches(selectedMonth: string, record: PayslipRecord): boolean {

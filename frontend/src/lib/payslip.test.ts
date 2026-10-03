@@ -50,8 +50,20 @@ describe("calcolo maggiorazioni dal cedolino", () => {
 
   it("marca come poco affidabile una riga lunga e ambigua", () => {
     const result = analyzePayslipText(`Ore ordinarie 264,55 1 2 3 4 5 6 ${"voce ".repeat(30)}`);
-    expect(result.ordinaryHours.value).toBe(264.55);
+    expect(result.ordinaryHours.value).toBeNull();
     expect(result.ordinaryHours.confidence).toBe("bassa");
+  });
+
+  it("non scambia quantità e importo se un'indennità contiene più numeri", () => {
+    const result = analyzePayslipText("Indennità turno 12 ore 50,00 €");
+    expect(result.allowances[0]).toMatchObject({ amount: null, confidence: "bassa" });
+    expect(result.allowances[0].source).toContain("Più valori");
+  });
+
+  it("non propone un totale economico quando la riga contiene più importi senza colonne", () => {
+    const result = analyzePayslipText("Totale competenze | 12 ore | 2.000,00 €");
+    expect(result.totals).toEqual([]);
+    expect(result.extraFields?.["total:totale competenze"]).toMatchObject({ value: null, confidence: "bassa" });
   });
 
   it("interpreta intestazioni e valori su righe successive senza confondere Livello e Contratto", () => {
@@ -97,7 +109,7 @@ describe("applicazione dati confermati", () => {
   it("prepara soltanto i valori scelti dall'utente", () => {
     const patch = buildPayslipSettingsPatch({
       basePay: 10,
-      overtimeRates: [15, 20, 25],
+      overtimeRates: [15],
       ccnl: "Multiservizi",
       level: "3",
     });
@@ -105,11 +117,17 @@ describe("applicazione dati confermati", () => {
     expect(patch).toMatchObject({
       basePay: 10,
       overtimePct: 15,
-      overtimeRates: [15, 20, 25],
+      overtimeRates: [15],
       ccnl: "Multiservizi",
       contractLevel: "3",
     });
     expect(patch.nightPct).toBeUndefined();
     expect(patch.holidayPct).toBeUndefined();
+  });
+
+  it("non sceglie la prima aliquota quando il cedolino ne indica diverse", () => {
+    const patch = buildPayslipSettingsPatch({ overtimeRates: [15, 25] });
+    expect(patch.overtimePct).toBeUndefined();
+    expect(patch.overtimeRates).toBeUndefined();
   });
 });

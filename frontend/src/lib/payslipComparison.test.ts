@@ -48,6 +48,11 @@ describe("confronto deterministico registro e cedolino", () => {
     const rows = compareMonthWithPayslip(totals(), record({ items }), { ...DEFAULT_SETTINGS, overtimePct: 15 }).filter((row) => row.key.startsWith("overtime-"));
     expect(rows.every((row) => row.status === "insufficiente" && row.registerValue === null)).toBe(true);
   });
+  it("non sceglie arbitrariamente la prima aliquota se il cedolino ne mostra più di una", () => {
+    const rows = compareMonthWithPayslip(totals(), record({ overtimeRates: [15, 25] }), { ...DEFAULT_SETTINGS, overtimePct: 25 });
+    expect(rows.find((row) => row.key === "overtimeRate"))
+      .toMatchObject({ payslipValue: null, difference: null, status: "insufficiente" });
+  });
   it("ignora percentuali non esplicite con affidabilità bassa", () => {
     const items: PayslipItem[] = [{ originalDescription: "Numero ambiguo", category: "overtime", quantity: 4, unit: "hours", ratePct: 25, amount: null, confidence: "bassa", source: "ai" }];
     expect(compareMonthWithPayslip(totals(), record({ items }), DEFAULT_SETTINGS).some((row) => row.key.startsWith("overtime-25-"))).toBe(false);
@@ -61,6 +66,99 @@ describe("confronto deterministico registro e cedolino", () => {
   it("non confronta ore e giorni senza una conversione configurata", () => {
     const items: PayslipItem[] = [{ originalDescription: "Permesso", category: "permission", quantity: 8, unit: "hours", ratePct: null, amount: null, confidence: "alta", source: "ai" }];
     expect(compareMonthWithPayslip({ ...totals(), permessiDays: 1 }, record({ items }), { ...DEFAULT_SETTINGS, dailyOrdinaryHours: 0 }).find((row) => row.key === "permission")?.status).toBe("insufficiente");
+  });
+  it("somma giorni e ore della stessa assenza soltanto con una conversione verificabile", () => {
+    const items: PayslipItem[] = [
+      { originalDescription: "Ferie giornata", category: "vacation", quantity: 1, unit: "days", ratePct: null, amount: null, confidence: "alta", source: "ai" },
+      { originalDescription: "Ferie quattro ore", category: "vacation", quantity: 4, unit: "hours", ratePct: null, amount: null, confidence: "alta", source: "ai" },
+    ];
+    const month = { ...totals(), ferieDays: 2 };
+    expect(compareMonthWithPayslip(month, record({ items }), { ...DEFAULT_SETTINGS, dailyOrdinaryHours: 4 }).find((row) => row.key === "vacation"))
+      .toMatchObject({ payslipValue: 2, status: "coerente" });
+    expect(compareMonthWithPayslip(month, record({ items }), { ...DEFAULT_SETTINGS, dailyOrdinaryHours: 0 }).find((row) => row.key === "vacation"))
+      .toMatchObject({ payslipValue: null, difference: null, status: "insufficiente" });
+  });
+  it("non considera completa una categoria se una voce non ha quantità", () => {
+    const items: PayslipItem[] = [
+      { originalDescription: "Ferie godute", category: "vacation", quantity: 1, unit: "days", ratePct: null, amount: null, confidence: "alta", source: "ai" },
+      { originalDescription: "Ferie senza quantità leggibile", category: "vacation", quantity: null, unit: "days", ratePct: null, amount: 50, confidence: "bassa", source: "ai" },
+    ];
+    expect(compareMonthWithPayslip({ ...totals(), ferieDays: 1 }, record({ items }), DEFAULT_SETTINGS).find((row) => row.key === "vacation"))
+      .toMatchObject({ payslipValue: null, difference: null, status: "insufficiente" });
+  });
+  it("non trasforma giorni festivi in ore di lavoro usando la durata ordinaria", () => {
+    const items: PayslipItem[] = [{ originalDescription: "Lavoro festivo 1 giorno", category: "holiday", quantity: 1, unit: "days", ratePct: null, amount: 80, confidence: "alta", source: "ai" }];
+    expect(compareMonthWithPayslip({ ...totals(), holidayMinutes: 8 * 60 }, record({ items }), DEFAULT_SETTINGS).find((row) => row.key === "holiday"))
+      .toMatchObject({ payslipValue: null, difference: null, status: "insufficiente" });
+  });
+  it("non considera euro o unità sconosciute come quantità orarie", () => {
+    for (const unit of ["euro", "unknown"] as const) {
+      const items: PayslipItem[] = [{ originalDescription: "Lavoro notturno", category: "night", quantity: 8, unit, ratePct: null, amount: 80, confidence: "alta", source: "ai" }];
+      expect(compareMonthWithPayslip({ ...totals(), nightMinutes: 8 * 60 }, record({ items }), DEFAULT_SETTINGS).find((row) => row.key === "night"))
+        .toMatchObject({ payslipValue: null, difference: null, status: "insufficiente" });
+    }
+  });
+  it("tratta un importo o una quantità non finita come dato insufficiente", () => {
+    const items: PayslipItem[] = [{ originalDescription: "Ore notturne", category: "night", quantity: Number.NaN, unit: "hours", ratePct: null, amount: null, confidence: "alta", source: "ai" }];
+    const rows = compareMonthWithPayslip({ ...totals(), nightMinutes: 8 * 60, pay: { ...totals().pay, total: 2000 } }, record({ items, grossTotal: Number.NaN }),
+      { ...DEFAULT_SETTINGS, basePay: 10 });
+    expect(rows.find((row) => row.key === "night")).toMatchObject({ payslipValue: null, difference: null, status: "insufficiente" });
+    expect(rows.find((row) => row.key === "gross")).toMatchObject({ payslipValue: null, difference: null, status: "insufficiente" });
+  });
+  it("non confronta una voce di straordinario in giorni o euro con le ore del registro", () => {
+    for (const unit of ["days", "euro"] as const) {
+      const items: PayslipItem[] = [{ originalDescription: "Straordinario 15%", category: "overtime", quantity: 2, unit, ratePct: 15, amount: 35, confidence: "alta", source: "ai" }];
+      const row = compareMonthWithPayslip(totals(), record({ items }), { ...DEFAULT_SETTINGS, overtimePct: 15 }).find((item) => item.key === "overtime-15-0");
+      expect(row).toMatchObject({ registerValue: null, payslipValue: 2, difference: null, status: "insufficiente", unit: unit === "days" ? "giorni" : "€" });
+    }
+  });
+  it("non attribuisce a ciascuna riga le ore totali quando più righe hanno la stessa aliquota", () => {
+    const items: PayslipItem[] = [2, 3].map((quantity) => ({ originalDescription: "Straordinario 15%", category: "overtime", quantity, unit: "hours", ratePct: 15, amount: 35, confidence: "alta", source: "ai" }));
+    expect(compareMonthWithPayslip(totals(), record({ items }), { ...DEFAULT_SETTINGS, overtimePct: 15 }).filter((row) => row.key.startsWith("overtime-")))
+      .toEqual(expect.arrayContaining([expect.objectContaining({ registerValue: null, status: "insufficiente" })]));
+  });
+  it("non riusa Lordo e Netto esclusi dalle voci o dai totali grezzi", () => {
+    const items: PayslipItem[] = [
+      { originalDescription: "Totale competenze", category: "gross", quantity: null, unit: "euro", ratePct: null, amount: 2000, confidence: "alta", source: "ai" },
+      { originalDescription: "Netto a pagare", category: "net", quantity: null, unit: "euro", ratePct: null, amount: 1500, confidence: "alta", source: "ai" },
+    ];
+    const estimated = { ...totals(), pay: { ...totals().pay, total: 2000, net: 1500, netEnabled: true } };
+    const rows = compareMonthWithPayslip(estimated, record({ grossTotal: null, netTotal: null, items, totals: [
+      { label: "Totale competenze", value: 2000 }, { label: "Netto a pagare", value: 1500 },
+    ] }), { ...DEFAULT_SETTINGS, basePay: 10, netEnabled: true });
+    expect(rows.find((row) => row.key === "gross")).toMatchObject({ payslipValue: null, difference: null, status: "insufficiente" });
+    expect(rows.find((row) => row.key === "net")).toMatchObject({ payslipValue: null, difference: null, status: "insufficiente" });
+    expect(rows.some((row) => row.key === "netArithmetic")).toBe(false);
+  });
+  it("non prende una singola trattenuta per il totale trattenute", () => {
+    const items: PayslipItem[] = [{ originalDescription: "Contributo INPS", category: "deductions", quantity: null, unit: "euro", ratePct: null, amount: 100, confidence: "alta", source: "ai" }];
+    const estimated = { ...totals(), pay: { ...totals().pay, total: 2000, net: 1500, netEnabled: true } };
+    expect(compareMonthWithPayslip(estimated, record({ items }), { ...DEFAULT_SETTINGS, basePay: 10 }).find((row) => row.key === "deductions"))
+      .toMatchObject({ payslipValue: null, difference: null, status: "insufficiente" });
+  });
+  it("non somma due totali di trattenute discordanti", () => {
+    const estimated = { ...totals(), pay: { ...totals().pay, total: 2000, net: 1500, netEnabled: true } };
+    const rows = compareMonthWithPayslip(estimated, record({ totals: [
+      { label: "Totale ritenute", value: 400 }, { label: "Totale trattenute", value: 500 },
+    ] }), { ...DEFAULT_SETTINGS, basePay: 10 });
+    expect(rows.find((row) => row.key === "deductions"))
+      .toMatchObject({ payslipValue: null, difference: null, status: "insufficiente" });
+  });
+  it("non confronta una sola indennità con il totale di reperibilità senza tariffa o con più voci", () => {
+    const item: PayslipItem = { originalDescription: "Indennità reperibilità", category: "allowance", quantity: 1, unit: "days", ratePct: null, amount: 30, confidence: "alta", source: "ai" };
+    const month = { ...totals(), reperibilitaDays: 2, pay: { ...totals().pay, standbyAllowance: 60 } };
+    const withoutRate = compareMonthWithPayslip(month, record({ items: [item] }), DEFAULT_SETTINGS).find((row) => row.key === "allowance-0");
+    expect(withoutRate).toMatchObject({ registerValue: null, difference: null, status: "insufficiente" });
+    const partialDays = compareMonthWithPayslip(month, record({ items: [item] }), { ...DEFAULT_SETTINGS, reperibilitaEuroPerDay: 30 }).find((row) => row.key === "allowance-0");
+    expect(partialDays).toMatchObject({ registerValue: null, difference: null, status: "insufficiente" });
+    const withTwoItems = compareMonthWithPayslip(month, record({ items: [item, item] }), { ...DEFAULT_SETTINGS, reperibilitaEuroPerDay: 30 });
+    expect(withTwoItems.filter((row) => row.key.startsWith("allowance-")).every((row) => row.status === "insufficiente")).toBe(true);
+  });
+  it("indica l'unità della paga oraria e mensile senza confonderle", () => {
+    const rows = compareMonthWithPayslip(totals(), record({ basePay: 12, monthlyPay: 2000 }),
+      { ...DEFAULT_SETTINGS, basePay: 12, monthlyReferencePay: 2000 });
+    expect(rows.find((row) => row.key === "basePay")).toMatchObject({ unit: "€/h", status: "coerente" });
+    expect(rows.find((row) => row.key === "monthlyPay")).toMatchObject({ unit: "€/mese", status: "coerente" });
   });
   it("rileva un cedolino di mese differente", () => expect(periodMatches("2026-09", record({ month: "2026-08" }))).toBe(false));
   it("segnala quattro ore di straordinario con i due valori", () => {
@@ -85,6 +183,23 @@ describe("confronto deterministico registro e cedolino", () => {
     expect(missing.find((row) => row.key === "contributions")?.status).toBe("insufficiente");
     expect(missing.find((row) => row.key === "contributions")?.explanation).toContain("aliquota contributiva");
     expect(missing.find((row) => row.key === "ordinary")?.status).toBe("coerente");
+  });
+  it("non somma una riga di contributi con il suo totale", () => {
+    const items: PayslipItem[] = [
+      { originalDescription: "Contributo INPS", category: "deductions", quantity: null, unit: "euro", ratePct: 10, amount: 100, confidence: "alta", source: "ai" },
+      { originalDescription: "Totale contributi", category: "deductions", quantity: null, unit: "euro", ratePct: null, amount: 100, confidence: "alta", source: "ai" },
+    ];
+    const rows = compareMonthWithPayslip(totals(), record({ items }), DEFAULT_SETTINGS);
+    expect(rows.find((row) => row.key === "contributions"))
+      .toMatchObject({ payslipValue: 100, difference: null, status: "insufficiente" });
+  });
+  it("segnala totali dei contributi discordanti come insufficienti", () => {
+    const items: PayslipItem[] = [100, 120].map((amount) => ({
+      originalDescription: "Totale contributi", category: "deductions", quantity: null, unit: "euro", ratePct: null, amount, confidence: "alta", source: "ai",
+    }));
+    const rows = compareMonthWithPayslip(totals(), record({ items }), DEFAULT_SETTINGS);
+    expect(rows.find((row) => row.key === "contributions"))
+      .toMatchObject({ payslipValue: null, difference: null, status: "insufficiente" });
   });
   it("ricostruisce IRPEF netta e netto matematico dalle componenti esplicite", () => {
     const items: PayslipItem[] = [

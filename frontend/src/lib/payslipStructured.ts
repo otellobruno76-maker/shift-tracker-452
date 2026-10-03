@@ -1,5 +1,6 @@
 import type { DocumentCell, DocumentRow, StructuredDocument } from "./documentModel";
 import { analyzePayslipText, type DetectedValue, type PayslipAnalysis } from "./payslip";
+import { inspectPayslipNumber, parsePayslipNumber } from "./payslipNumber";
 
 export interface PayslipAdapter {
   id: string;
@@ -8,10 +9,7 @@ export interface PayslipAdapter {
 }
 
 const normalize = (value: string) => value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9%]+/g, " ").trim();
-const numeric = (raw: string): number | null => {
-  const value = Number(raw.replace(/\s/g, "").replace(/\.(?=\d{3}(?:\D|$))/g, "").replace(",", ".").replace(/[^\d.-]/g, ""));
-  return Number.isFinite(value) ? value : null;
-};
+const numeric = parsePayslipNumber;
 const center = (cell: DocumentCell) => (cell.x + cell.right) / 2;
 const cellUnder = (row: DocumentRow, header: DocumentCell): DocumentCell | undefined => {
   const candidate = row.cells.slice().sort((a, b) => Math.abs(center(a) - center(header)) - Math.abs(center(b) - center(header)))[0];
@@ -46,8 +44,13 @@ function headerValue(document: StructuredDocument, aliases: RegExp, validate?: (
 }
 
 function numericHeaderValue(document: StructuredDocument, aliases: RegExp, min: number, max: number): DetectedValue<number> | null {
-  const found = headerValue(document, aliases, (raw) => { const value = numeric(raw); return value !== null && value >= min && value <= max; });
-  return found ? { ...found, value: numeric(found.value!) } : null;
+  const found = headerValue(document, aliases);
+  if (!found) return null;
+  const result = inspectPayslipNumber((found.value ?? "").replace(/\s*%$/, ""));
+  if (result.status === "uncertain") {
+    return { ...found, value: null, confidence: "bassa", source: `Formato numerico incerto (${found.value}): ${found.source}` };
+  }
+  return result.value !== null && result.value >= min && result.value <= max ? { ...found, value: result.value } : null;
 }
 
 function hourlyCandidate(document: StructuredDocument): DetectedValue<number> | null {
@@ -90,9 +93,11 @@ function conceptFields(document: StructuredDocument): Record<string, DetectedVal
     const textValue = headerValue(document, concept.aliases);
     if (!textValue) continue;
     if (!concept.numeric) { result[concept.key] = textValue; continue; }
-    const value = numeric(textValue.value ?? "");
-    if (value !== null && value >= (concept.min ?? -Infinity) && value <= (concept.max ?? Infinity)) {
-      result[concept.key] = { ...textValue, value };
+    const inspected = inspectPayslipNumber(textValue.value ?? "");
+    if (inspected.status === "uncertain") {
+      result[concept.key] = { ...textValue, value: null, confidence: "bassa", source: `Formato numerico incerto (${textValue.value}): ${textValue.source}` };
+    } else if (inspected.value !== null && inspected.value >= (concept.min ?? -Infinity) && inspected.value <= (concept.max ?? Infinity)) {
+      result[concept.key] = { ...textValue, value: inspected.value };
     }
   }
   return result;

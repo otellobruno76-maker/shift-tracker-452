@@ -17,9 +17,10 @@ import {
   type Confidence,
   type PayslipAnalysis,
 } from "@/lib/payslip";
+import { parsePayslipNumber } from "@/lib/payslipNumber";
 import { analyzeStructuredPayslip } from "@/lib/payslipStructured";
 import { mergePayslipAnalyses, requestPayslipAI } from "@/lib/payslipAi";
-import { initialReview, updateReviewValue, type ReviewState } from "@/lib/payslipReview";
+import { confirmReviewValues, initialReview, mergeReviewKeepingUserChoices, updateReviewSelection, updateReviewValue, type ReviewState } from "@/lib/payslipReview";
 import { savePayslip, saveSettings, usePayslips, useSettings } from "@/lib/store";
 import { uid, type PayslipRecord } from "@/lib/types";
 import { getActiveMonth } from "@/lib/activeMonth";
@@ -30,11 +31,6 @@ const confidenceStyle: Record<Confidence, string> = {
   media: "bg-[#FEF3C7] text-[#92400E]",
   bassa: "bg-[#FEE2E2] text-[#991B1B]",
 };
-
-function parseNumber(value: string): number | null {
-  const parsed = Number(value.trim().replace(/\./g, "").replace(",", "."));
-  return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
-}
 
 export default function ConfiguraCedolino() {
   const navigate = useNavigate();
@@ -114,7 +110,9 @@ export default function ConfiguraCedolino() {
       const merged = mergePayslipAnalyses(analysis, ai);
       const nextReview = initialReview(merged.analysis, merged.month ?? review.month, settings.dailyOrdinaryHours);
       if (merged.payType) nextReview.payType = merged.payType;
-      setAnalysis(merged.analysis); setReview(nextReview); setConflicts(merged.conflicts);
+      setAnalysis(merged.analysis);
+      setReview((current) => current ? mergeReviewKeepingUserChoices(current, nextReview) : nextReview);
+      setConflicts(merged.conflicts);
       toast.success("Analisi AI completata. Controlla tutti i valori prima di salvare.");
     } catch (cause) {
       if (mounted.current) setAiError(cause instanceof Error ? cause.message : "Analisi AI temporaneamente non disponibile");
@@ -128,40 +126,23 @@ export default function ConfiguraCedolino() {
     if (!review || !analysis || savingRecord) return;
     const detectedAnalysis = analysis;
     const chosen = review.selected;
-    const hasValue = (key: keyof ReviewState) => String(review[key] ?? "").trim() !== "";
+    let confirmed: ReturnType<typeof confirmReviewValues>;
+    try {
+      confirmed = confirmReviewValues(review);
+    } catch (cause) {
+      toast.error(cause instanceof Error ? cause.message : "Controlla i valori selezionati.");
+      return;
+    }
+    const numbers = confirmed.numbers;
     const values: Parameters<typeof buildPayslipSettingsPatch>[0] = {};
-    const numericFields = [
-      ["basePay", review.basePay],
-      ["monthlyPay", review.monthlyPay],
-      ["ordinaryHours", review.ordinaryHours],
-      ["nightPct", review.nightPct],
-      ["holidayPct", review.holidayPct],
-    ] as const;
-    for (const [key, raw] of numericFields) {
-      if (!chosen[key]) continue;
-      const value = parseNumber(raw);
-      if (value === null) {
-        toast.error(`Controlla il valore “${key}”.`);
-        return;
-      }
-      values[key] = value;
+    for (const key of ["basePay", "monthlyPay", "ordinaryHours", "nightPct", "holidayPct"] as const) {
+      const value = numbers[key];
+      if (value !== null) values[key] = value;
     }
-    if (chosen.overtimeRates) {
-      const rates = review.overtimeRates
-        .split(/[;\n]+|,\s+(?=\d)/)
-        .map((part) => parseNumber(part))
-        .filter((value): value is number => value !== null);
-      if (rates.length === 0) {
-        toast.error("Controlla le maggiorazioni dello straordinario.");
-        return;
-      }
-      values.overtimeRates = rates;
-    }
+    if (chosen.overtimeRates) values.overtimeRates = confirmed.overtimeRates;
     if (chosen.ccnl) values.ccnl = review.ccnl.trim();
     if (chosen.level) values.level = review.level.trim();
-    values.allowances = review.allowances
-      .filter((item) => item.selected)
-      .map((item) => ({ name: item.name, amount: parseNumber(item.amountText) }));
+    values.allowances = confirmed.allowances;
 
     if (!review.month) {
       toast.error("Scegli mese e anno del cedolino.");
@@ -180,27 +161,27 @@ export default function ConfiguraCedolino() {
       payType: review.payType,
       qualification: chosen.qualification ? review.qualification.trim() : "",
       contractCode: chosen.contractCode ? review.contractCode.trim() : "",
-      partTimePct: chosen.partTimePct ? parseNumber(review.partTimePct) : null,
-      basePay: chosen.basePay ? parseNumber(review.basePay) : null,
-      dailyPay: chosen.dailyPay ? parseNumber(review.dailyPay) : null,
-      monthlyPay: chosen.monthlyPay ? parseNumber(review.monthlyPay) : null,
-      ordinaryHours: chosen.ordinaryHours ? parseNumber(review.ordinaryHours) : null,
-      dailyOrdinaryHours: hasValue("dailyOrdinaryHours") ? parseNumber(review.dailyOrdinaryHours) : null,
-      workedHours: chosen.workedHours ? parseNumber(review.workedHours) : null,
-      workedDays: chosen.workedDays ? parseNumber(review.workedDays) : null,
-      totalElementsPay: chosen.totalElementsPay ? parseNumber(review.totalElementsPay) : null,
-      grossTotal: hasValue("grossTotal") ? parseNumber(review.grossTotal) : null,
-      netTotal: hasValue("netTotal") ? parseNumber(review.netTotal) : null,
-      overtimeHours: chosen.overtimeHours ? parseNumber(review.overtimeHours) : null,
-      overtimeTariffs: chosen.overtimeTariffs ? review.overtimeTariffs.split(/[;,]/).map(parseNumber).filter((value): value is number => value !== null) : [],
-      overtimeRates: values.overtimeRates ?? [],
-      nightPct: chosen.nightPct ? parseNumber(review.nightPct) : null,
-      holidayPct: chosen.holidayPct ? parseNumber(review.holidayPct) : null,
-      allowances: values.allowances ?? [],
+      partTimePct: numbers.partTimePct,
+      basePay: numbers.basePay,
+      dailyPay: numbers.dailyPay,
+      monthlyPay: numbers.monthlyPay,
+      ordinaryHours: numbers.ordinaryHours,
+      dailyOrdinaryHours: numbers.dailyOrdinaryHours,
+      workedHours: numbers.workedHours,
+      workedDays: numbers.workedDays,
+      totalElementsPay: numbers.totalElementsPay,
+      grossTotal: numbers.grossTotal,
+      netTotal: numbers.netTotal,
+      overtimeHours: numbers.overtimeHours,
+      overtimeTariffs: confirmed.overtimeTariffs,
+      overtimeRates: confirmed.overtimeRates,
+      nightPct: numbers.nightPct,
+      holidayPct: numbers.holidayPct,
+      allowances: confirmed.allowances,
       ccnl: chosen.ccnl ? review.ccnl.trim() : "",
       level: chosen.level ? review.level.trim() : "",
-      totals: review.totals,
-      items: review.items,
+      totals: confirmed.totals,
+      items: confirmed.items,
       fieldProvenance: Object.fromEntries(Object.entries(review.selected).filter(([, selected]) => selected).map(([key]) => [key, {
         source: review.edited[key] ? "manuale" : detectedAnalysis[key as keyof PayslipAnalysis] && typeof detectedAnalysis[key as keyof PayslipAnalysis] === "object" && "source" in (detectedAnalysis[key as keyof PayslipAnalysis] as object) && String((detectedAnalysis[key as keyof PayslipAnalysis] as { source?: string }).source).startsWith("Analisi AI") ? "ai" : "locale",
         confidence: "media",
@@ -386,13 +367,32 @@ function Review({
   saving: boolean;
 }) {
   const updateValue = (key: "qualification" | "contractCode" | "partTimePct" | "basePay" | "dailyPay" | "monthlyPay" | "ordinaryHours" | "dailyOrdinaryHours" | "workedHours" | "workedDays" | "totalElementsPay" | "grossTotal" | "netTotal" | "overtimeHours" | "overtimeTariffs" | "overtimeRates" | "nightPct" | "holidayPct" | "ccnl" | "level", value: string) => onChange(updateReviewValue(review, key, value));
-  const updateSelected = (key: string, value: boolean) => onChange({ ...review, selected: { ...review.selected, [key]: value } });
+  const updateSelected = (key: string, value: boolean) => onChange(updateReviewSelection(review, key, value));
   const sourceForRates = analysis.overtimeRates.length
     ? analysis.overtimeRates.map((rate) => rate.source).join(" · ")
     : "Non rilevata";
   const rateConfidence: Confidence = analysis.overtimeRates.some((rate) => rate.confidence === "media") ? "media" : analysis.overtimeRates[0]?.confidence ?? "bassa";
   const incomplete = reliablePayslipFieldCount(analysis) < 4;
-  const estimatedDaily = estimatedDailyValue(parseNumber(review.basePay), parseNumber(review.dailyOrdinaryHours));
+  const estimatedDaily = review.selected.basePay && review.selected.dailyOrdinaryHours
+    ? estimatedDailyValue(parsePayslipNumber(review.basePay), parsePayslipNumber(review.dailyOrdinaryHours)) : null;
+  const totalEvidence = (pattern: RegExp, category: "gross" | "net") => {
+    const uncertain = Object.entries(analysis.extraFields ?? {}).filter(([key]) => key.startsWith("total:") && pattern.test(key.slice(6))).map(([, value]) => value.source);
+    const candidates = [
+      ...analysis.totals.filter((item) => pattern.test(item.label)),
+      ...analysis.items.filter((item) => item.category === category && item.amount !== null).map((item) => ({
+        label: item.originalDescription, value: item.amount as number, source: `Voce ${item.source}: ${item.note ?? item.originalDescription}`,
+      })),
+    ];
+    const conflicting = uncertain.length > 0 || candidates.some((item) => Math.abs(item.value - candidates[0].value) > 0.01);
+    return {
+      source: conflicting
+        ? `Proposte da verificare: ${[...candidates.map((item) => `${item.label} ${item.value.toLocaleString("it-IT")} € (${item.source})`), ...uncertain].join(" · ")}`
+        : candidates[0]?.source ?? "Non rilevata",
+      confidence: conflicting ? "bassa" as const : candidates.length ? "alta" as const : "bassa" as const,
+    };
+  };
+  const grossEvidence = totalEvidence(/lordo|competenze/i, "gross");
+  const netEvidence = totalEvidence(/netto/i, "net");
 
   return (
     <div className="mt-4 space-y-4" data-testid="payslip-review">
@@ -405,8 +405,8 @@ function Review({
         <p className="text-xs font-bold uppercase tracking-wide text-[#64748B]">Documento analizzato</p>
         <p className="mt-1 truncate text-sm font-bold">{filename}</p>
         <p className="mt-2 text-xs text-[#64748B]">Controlla ogni valore. Il salvataggio nello storico non modifica automaticamente le impostazioni.</p>
-        <div className="mt-3"><Label htmlFor="payslip-month" className="font-extrabold">Mese e anno</Label><Input id="payslip-month" type="month" className="mt-1 h-12" value={review.month} onChange={(event) => onChange({ ...review, month: event.target.value })} /></div>
-        <div className="mt-3"><Label htmlFor="pay-type" className="font-extrabold">Tipo di retribuzione</Label><select id="pay-type" className="mt-1 h-12 w-full rounded-md border border-input bg-white px-3 text-base" value={review.payType} onChange={(event) => onChange({ ...review, payType: event.target.value as ReviewState["payType"] })}><option value="">Non specificato</option><option value="oraria">Oraria</option><option value="giornaliera">Giornaliera</option><option value="mensile">Mensile</option></select></div>
+        <div className="mt-3"><Label htmlFor="payslip-month" className="font-extrabold">Mese e anno</Label><Input id="payslip-month" type="month" className="mt-1 h-12" value={review.month} onChange={(event) => onChange(updateReviewValue(review, "month", event.target.value))} /></div>
+        <div className="mt-3"><Label htmlFor="pay-type" className="font-extrabold">Tipo di retribuzione</Label><select id="pay-type" className="mt-1 h-12 w-full rounded-md border border-input bg-white px-3 text-base" value={review.payType} onChange={(event) => onChange(updateReviewValue(review, "payType", event.target.value as ReviewState["payType"]))}><option value="">Non specificato</option><option value="oraria">Oraria</option><option value="giornaliera">Giornaliera</option><option value="mensile">Mensile</option></select></div>
       </section>
 
       <ReviewField label="Qualifica" value={review.qualification} checked={review.selected.qualification} source={analysis.qualification.source} confidence={analysis.qualification.confidence} onValue={(value) => updateValue("qualification", value)} onChecked={(value) => updateSelected("qualification", value)} />
@@ -416,13 +416,13 @@ function Review({
       <ReviewField label="Retribuzione giornaliera" suffix="€/giorno" value={review.dailyPay} checked={review.selected.dailyPay} source={analysis.dailyPay.source} confidence={analysis.dailyPay.confidence} onValue={(value) => updateValue("dailyPay", value)} onChecked={(value) => updateSelected("dailyPay", value)} />
       <ReviewField label="Retribuzione mensile" suffix="€/mese" value={review.monthlyPay} checked={review.selected.monthlyPay} source={analysis.monthlyPay.source} confidence={analysis.monthlyPay.confidence} onValue={(value) => updateValue("monthlyPay", value)} onChecked={(value) => updateSelected("monthlyPay", value)} />
       <ReviewField label="Ore ordinarie indicate" suffix="ore" value={review.ordinaryHours} checked={review.selected.ordinaryHours} source={analysis.ordinaryHours.source} confidence={analysis.ordinaryHours.confidence} onValue={(value) => updateValue("ordinaryHours", value)} onChecked={(value) => updateSelected("ordinaryHours", value)} />
-      <ReviewField label="Ore ordinarie giornaliere" suffix="ore/giorno" value={review.dailyOrdinaryHours} checked={review.dailyOrdinaryHours.trim() !== ""} source="Valore proposto dalle Impostazioni" confidence="media" onValue={(value) => updateValue("dailyOrdinaryHours", value)} onChecked={() => undefined} />
+      <ReviewField label="Ore ordinarie giornaliere" suffix="ore/giorno" value={review.dailyOrdinaryHours} checked={review.selected.dailyOrdinaryHours} source="Valore proposto dalle Impostazioni" confidence="media" onValue={(value) => updateValue("dailyOrdinaryHours", value)} onChecked={(value) => updateSelected("dailyOrdinaryHours", value)} />
       {estimatedDaily !== null && <section className="rounded-2xl border border-dashed border-[#93C5FD] bg-[#EFF6FF] p-4"><p className="text-sm font-bold text-[#1E40AF]">Valore giornaliero stimato</p><p className="mt-1 text-xl font-extrabold text-[#1E3A8A]">{estimatedDaily.toLocaleString("it-IT", { minimumFractionDigits: 2 })} €</p><p className="mt-1 text-xs text-[#1D4ED8]">Calcolato: paga oraria × ore ordinarie giornaliere. Non è un dato letto dal cedolino.</p></section>}
       <ReviewField label="Ore lavorate" suffix="ore" value={review.workedHours} checked={review.selected.workedHours} source={analysis.workedHours.source} confidence={analysis.workedHours.confidence} onValue={(value) => updateValue("workedHours", value)} onChecked={(value) => updateSelected("workedHours", value)} />
       <ReviewField label="Giorni lavorati" suffix="giorni" value={review.workedDays} checked={review.selected.workedDays} source={analysis.workedDays.source} confidence={analysis.workedDays.confidence} onValue={(value) => updateValue("workedDays", value)} onChecked={(value) => updateSelected("workedDays", value)} />
       <ReviewField label="Totale elementi retributivi" suffix="€" value={review.totalElementsPay} checked={review.selected.totalElementsPay} source={analysis.totalElementsPay.source} confidence={analysis.totalElementsPay.confidence} onValue={(value) => updateValue("totalElementsPay", value)} onChecked={(value) => updateSelected("totalElementsPay", value)} />
-      <ReviewField label="Lordo / totale competenze" suffix="€" value={review.grossTotal} checked={review.selected.grossTotal} source={analysis.totals.find((item) => /lordo|competenze/i.test(item.label))?.source ?? "Non rilevata"} confidence={analysis.totals.some((item) => /lordo|competenze/i.test(item.label)) ? "alta" : "bassa"} onValue={(value) => updateValue("grossTotal", value)} onChecked={(value) => updateSelected("grossTotal", value)} />
-      <ReviewField label="Netto a pagare" suffix="€" value={review.netTotal} checked={review.selected.netTotal} source={analysis.totals.find((item) => /netto/i.test(item.label))?.source ?? "Non rilevata"} confidence={analysis.totals.some((item) => /netto/i.test(item.label)) ? "alta" : "bassa"} onValue={(value) => updateValue("netTotal", value)} onChecked={(value) => updateSelected("netTotal", value)} />
+      <ReviewField label="Lordo / totale competenze" suffix="€" value={review.grossTotal} checked={review.selected.grossTotal} source={grossEvidence.source} confidence={grossEvidence.confidence} onValue={(value) => updateValue("grossTotal", value)} onChecked={(value) => updateSelected("grossTotal", value)} />
+      <ReviewField label="Netto a pagare" suffix="€" value={review.netTotal} checked={review.selected.netTotal} source={netEvidence.source} confidence={netEvidence.confidence} onValue={(value) => updateValue("netTotal", value)} onChecked={(value) => updateSelected("netTotal", value)} />
       <ReviewField label="Ore straordinarie indicate" suffix="ore" value={review.overtimeHours} checked={review.selected.overtimeHours} source={analysis.overtimeHours.source} confidence={analysis.overtimeHours.confidence} onValue={(value) => updateValue("overtimeHours", value)} onChecked={(value) => updateSelected("overtimeHours", value)} />
       <ReviewField label="Tariffe straordinarie" suffix="€/h" value={review.overtimeTariffs} checked={review.selected.overtimeTariffs} source={analysis.overtimeTariffs.map((item) => item.source).join(" · ") || "Non rilevata"} confidence={analysis.overtimeTariffs[0]?.confidence ?? "bassa"} onValue={(value) => updateValue("overtimeTariffs", value)} onChecked={(value) => updateSelected("overtimeTariffs", value)} />
       <ReviewField label="Maggiorazioni straordinario" suffix="%" value={review.overtimeRates} checked={review.selected.overtimeRates} source={sourceForRates} confidence={rateConfidence} placeholder="Es. 15; 20; 25" onValue={(value) => updateValue("overtimeRates", value)} onChecked={(value) => updateSelected("overtimeRates", value)} />
@@ -443,9 +443,9 @@ function Review({
                   <Checkbox checked={allowance.selected} onCheckedChange={(checked) => {
                     const items = [...review.allowances];
                     items[index] = { ...allowance, selected: checked === true };
-                    onChange({ ...review, allowances: items });
+                    onChange({ ...review, allowances: items, allowancesEdited: true });
                   }} />
-                  <Input className="h-10" placeholder="Nome indennità" value={allowance.name} onChange={(event) => { const items = [...review.allowances]; items[index] = { ...allowance, name: event.target.value }; onChange({ ...review, allowances: items }); }} />
+                  <Input className="h-10" placeholder="Nome indennità" value={allowance.name} onChange={(event) => { const items = [...review.allowances]; items[index] = { ...allowance, name: event.target.value, source: "Inserimento manuale" }; onChange({ ...review, allowances: items, allowancesEdited: true }); }} />
                 </span>
                 <Input
                   className="mt-2 h-11"
@@ -454,8 +454,8 @@ function Review({
                   value={allowance.amountText}
                   onChange={(event) => {
                     const items = [...review.allowances];
-                    items[index] = { ...allowance, amountText: event.target.value };
-                    onChange({ ...review, allowances: items });
+                    items[index] = { ...allowance, amountText: event.target.value, source: "Inserimento manuale" };
+                    onChange({ ...review, allowances: items, allowancesEdited: true });
                   }}
                 />
                 <p className="mt-2 text-xs text-[#64748B]">Provenienza: {allowance.source}</p>
@@ -463,10 +463,54 @@ function Review({
             ))}
           </div>
         )}
-        <Button variant="outline" className="mt-3 h-11 w-full" onClick={() => onChange({ ...review, allowances: [...review.allowances, { name: "", amount: null, amountText: "", source: "Inserimento manuale", confidence: "bassa", selected: true }] })}>Aggiungi indennità</Button>
+        <Button variant="outline" className="mt-3 h-11 w-full" onClick={() => onChange({ ...review, allowances: [...review.allowances, { name: "", amount: null, amountText: "", source: "Inserimento manuale", confidence: "bassa", selected: true }], allowancesEdited: true })}>Aggiungi indennità</Button>
       </section>
 
-      <section className="rounded-2xl border border-[#E2E5EA] bg-white p-4 shadow-sm"><h2 className="font-extrabold">Totali rilevabili</h2>{review.totals.length === 0 ? <p className="mt-2 text-sm text-[#64748B]">Non rilevati</p> : <div className="mt-2 space-y-1">{review.totals.map((total, index) => <p key={index} className="text-sm">{total.label}: <b>{total.value.toLocaleString("it-IT")}</b></p>)}</div>}</section>
+      <section className="rounded-2xl border border-[#E2E5EA] bg-white p-4 shadow-sm">
+        <h2 className="font-extrabold">Altri totali rilevati</h2>
+        <p className="mt-1 text-xs text-[#64748B]">Lordo e Netto si confermano nei campi sopra. Questi altri totali possono entrare nei confronti. Proposte duplicate o discordanti richiedono una scelta esplicita.</p>
+        {review.totals.length === 0 ? <p className="mt-2 text-sm text-[#64748B]">Non rilevati</p> : <div className="mt-2 space-y-3">{review.totals.map((total, index) => (
+          <div key={index} className="rounded-xl bg-[#F8FAFC] p-3">
+            <div className="flex items-center gap-2"><Checkbox aria-label={`Usa totale ${total.label}`} checked={total.selected} onCheckedChange={(checked) => {
+              const totals = [...review.totals]; totals[index] = { ...total, selected: checked === true };
+              onChange({ ...review, totals, totalsEdited: true });
+            }} /><span className="text-sm font-bold">{total.label}</span></div>
+            <Input aria-label={`Importo ${total.label}`} inputMode="decimal" className="mt-2 h-10" value={total.valueText} onChange={(event) => {
+              const totals = [...review.totals]; totals[index] = { ...total, valueText: event.target.value, selected: event.target.value.trim() !== "", source: "Correzione manuale" };
+              onChange({ ...review, totals, totalsEdited: true });
+            }} />
+            <p className="mt-1 text-xs text-[#64748B]">Provenienza: {total.source}</p>
+          </div>
+        ))}</div>}
+      </section>
+
+      <section className="rounded-2xl border border-[#E2E5EA] bg-white p-4 shadow-sm">
+        <h2 className="font-extrabold">Voci per i confronti</h2>
+        <p className="mt-1 text-xs text-[#64748B]">Controlla quantità, unità e importi. Escludi le voci poco attendibili.</p>
+        {review.items.length === 0 ? <p className="mt-2 text-sm text-[#64748B]">Nessuna voce rilevata.</p> : <div className="mt-3 space-y-3">{review.items.map((item, index) => {
+          const changeItem = (patch: Partial<typeof item>) => {
+            const items = [...review.items];
+            const corrected = !Object.hasOwn(patch, "selected");
+            items[index] = { ...item, ...patch, ...(corrected ? { selected: true, source: "manuale" as const, confidence: "media" as const } : {}) };
+            onChange({ ...review, items, itemsEdited: true });
+          };
+          return <div key={index} className="rounded-xl bg-[#F8FAFC] p-3">
+            <div className="flex items-center gap-2"><Checkbox aria-label={`Usa voce ${item.originalDescription}`} checked={item.selected} onCheckedChange={(checked) => changeItem({ selected: checked === true })} /><span className="text-sm font-bold">{item.originalDescription}</span></div>
+            <div className="mt-2 grid grid-cols-2 gap-2">
+              <label className="text-xs">Categoria<select aria-label={`Categoria ${item.originalDescription}`} className="mt-1 h-10 w-full rounded-md border border-input bg-white px-2 text-sm" value={item.category} onChange={(event) => changeItem({ category: event.target.value as typeof item.category })}>{[
+                ["ordinary", "Ordinarie"], ["overtime", "Straordinario"], ["holiday", "Festivo"], ["night", "Notturno"], ["vacation", "Ferie"], ["permission", "Permessi"], ["rol", "ROL"], ["former_holiday", "Ex festività"], ["sickness", "Malattia"], ["absence", "Altra assenza"], ["allowance", "Indennità"], ["earnings", "Competenze"], ["deductions", "Trattenute"], ["other", "Altro"],
+              ].map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
+              <label className="text-xs">Unità<select aria-label={`Unità ${item.originalDescription}`} className="mt-1 h-10 w-full rounded-md border border-input bg-white px-2 text-sm" value={item.unit} onChange={(event) => changeItem({ unit: event.target.value as typeof item.unit })}>{[
+                ["hours", "Ore"], ["days", "Giorni"], ["euro", "Euro"], ["percent", "Percentuale"], ["unknown", "Incerta"],
+              ].map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
+              <label className="text-xs">Quantità<Input aria-label={`Quantità ${item.originalDescription}`} inputMode="decimal" className="mt-1 h-10" value={item.quantityText} onChange={(event) => changeItem({ quantityText: event.target.value })} /></label>
+              <label className="text-xs">Maggiorazione %<Input aria-label={`Maggiorazione ${item.originalDescription}`} inputMode="decimal" className="mt-1 h-10" value={item.ratePctText} onChange={(event) => changeItem({ ratePctText: event.target.value })} /></label>
+              <label className="col-span-2 text-xs">Importo €<Input aria-label={`Importo voce ${item.originalDescription}`} inputMode="decimal" className="mt-1 h-10" value={item.amountText} onChange={(event) => changeItem({ amountText: event.target.value })} /></label>
+            </div>
+            <p className="mt-1 text-xs text-[#64748B]">Provenienza: {item.source} · Affidabilità {item.confidence}</p>
+          </div>;
+        })}</div>}
+      </section>
 
       <div className="space-y-2">
         <Button className="h-14 w-full text-base font-extrabold" data-testid="btn-apply-payslip" disabled={saving} onClick={onConfirm}>Salva cedolino</Button>
@@ -493,14 +537,14 @@ function ReviewField({ label, suffix, value, checked, source, confidence, placeh
   return (
     <section className="rounded-2xl border border-[#E2E5EA] bg-white p-4 shadow-sm">
       <div className="flex items-start gap-3">
-        <Checkbox checked={checked} onCheckedChange={(next) => onChecked(next === true)} className="mt-1 h-5 w-5" />
+        <Checkbox aria-label={`Usa ${label}`} checked={checked} onCheckedChange={(next) => onChecked(next === true)} className="mt-1 h-5 w-5" />
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <Label className="font-extrabold">{label}</Label>
             {detected && <span className={`rounded-full px-2 py-0.5 text-[11px] font-bold ${confidenceStyle[confidence]}`}>Affidabilità {confidence}</span>}
           </div>
           <div className="mt-2 flex items-center gap-2">
-            <Input value={value} placeholder={placeholder ?? (detected ? "" : "Non rilevata")} className="h-11" onChange={(event) => onValue(event.target.value)} />
+            <Input aria-label={label} value={value} placeholder={placeholder ?? (detected ? "" : "Non rilevata")} className="h-11" onChange={(event) => onValue(event.target.value)} />
             {suffix && <span className="shrink-0 text-sm font-bold text-[#64748B]">{suffix}</span>}
           </div>
           {detected && <p className="mt-2 break-words text-xs text-[#64748B]">Provenienza: {source}</p>}

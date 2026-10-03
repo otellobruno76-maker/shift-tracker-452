@@ -1,4 +1,5 @@
 import type { PayslipItem, Settings } from "./types";
+import { inspectPayslipNumber, parsePayslipNumber } from "./payslipNumber";
 
 export type Confidence = "alta" | "media" | "bassa";
 
@@ -84,14 +85,9 @@ export function estimatedDailyValue(basePay: number | null, dailyHours: number |
   return Math.round(basePay * dailyHours * 100) / 100;
 }
 
-function numberIt(raw: string): number | null {
-  const compacted = raw.replace(/\s/g, "");
-  const cleaned = compacted.includes(",") && compacted.includes(".")
-    ? compacted.replace(/\./g, "").replace(",", ".")
-    : compacted.replace(",", ".");
-  const value = Number(cleaned);
-  return Number.isFinite(value) ? value : null;
-}
+const numberCandidates = (text: string): string[] => [...text.matchAll(
+  /(?<![\d.,])(?:€\s*)?[+-]?(?:\d{1,3}(?:[ \u00a0\u202f]\d{3})+(?:[.,]\d+)?|\d(?:[\d.,]*\d)?)(?![\d.,])/g,
+)].map((match) => match[0]);
 
 function compact(line: string): string {
   return line.replace(/\s+/g, " ").trim();
@@ -129,19 +125,29 @@ function firstNumberAfter(lines: string[], label: RegExp, min: number, max: numb
   for (const line of lines) {
     const matchLabel = line.match(label);
     if (!matchLabel || matchLabel.index === undefined) continue;
-    const tail = line.slice(matchLabel.index + matchLabel[0].length).replace(/^\s*[:|=-]?\s*/, "");
-    const candidates = [...tail.matchAll(/(?:€\s*)?(\d{1,6}(?:\.\d{3})*(?:,\d{1,6})?|\d{1,6}(?:[.,]\d{1,6})?)/g)];
-    const value = candidates.length ? numberIt(candidates[0][1]) : null;
+    const tail = line.slice(matchLabel.index + matchLabel[0].length).replace(/^\s*[:|=]?\s*/, "");
+    const candidates = numberCandidates(tail);
+    if (candidates.length > 1) {
+      return { value: null, source: `Più valori numerici da verificare: ${compact(line)}`, confidence: "bassa" };
+    }
+    const result = candidates.length ? inspectPayslipNumber(candidates[0]) : null;
+    if (result?.status === "uncertain") {
+      return { value: null, source: `Formato numerico incerto (${candidates[0]}): ${compact(line)}`, confidence: "bassa" };
+    }
+    const value = result?.value ?? null;
     if (value !== null && value >= min && value <= max) {
-      const confused = line.length > 150 || candidates.length > 5;
-      return { value, source: compact(line), confidence: confused ? "bassa" : candidates.length === 1 ? "alta" : "media" };
+      return { value, source: compact(line), confidence: line.length > 150 ? "bassa" : "alta" };
     }
   }
   for (let index = 0; index < lines.length - 1; index++) {
     if (!label.test(lines[index]) || /\d/.test(lines[index])) continue;
     const next = cells(lines[index + 1]);
     if (next.length !== 1) continue;
-    const value = numberIt(next[0]);
+    const result = inspectPayslipNumber(next[0]);
+    if (result.status === "uncertain") {
+      return { value: null, source: `Formato numerico incerto (${next[0]}): ${compact(lines[index])} → ${compact(lines[index + 1])}`, confidence: "bassa" };
+    }
+    const value = result.value;
     if (value !== null && value >= min && value <= max) {
       return { value, source: `${compact(lines[index])} → ${compact(lines[index + 1])}`, confidence: "media" };
     }
@@ -163,7 +169,7 @@ function hourlyBaseCandidate(lines: string[]): DetectedValue<number> {
       if (values.some((cell) => rateHeader.test(cell))) break;
       const rowText = values.join(" ");
       if (!hourlyMeaning.test(rowText)) continue;
-      const value = numberIt(values[rateColumn] ?? "");
+      const value = parsePayslipNumber(values[rateColumn] ?? "");
       if (value !== null && value >= 1 && value <= 200) {
         candidates.push({ value, source: compact(lines[row]), header: headers[rateColumn] });
       }
@@ -207,9 +213,9 @@ export function analyzePayslipText(rawText: string): PayslipAnalysis {
   const qualification = tableValue(employmentTable, /^qualifica$/i);
   const contractCode = tableValue(employmentTable, /contratto\s+di\s+lavoro|^contratto$/i);
   const partTimeText = tableValue(employmentTable, /part.?time/i);
-  const partTimeValue = partTimeText.value?.match(/\d+(?:[.,]\d+)?/)?.[0];
+  const partTimeValue = partTimeText.value?.trim().replace(/\s*%$/, "");
   const partTimePct: DetectedValue<number> = partTimeValue
-    ? { value: numberIt(partTimeValue), source: partTimeText.source, confidence: partTimeText.confidence }
+    ? { value: parsePayslipNumber(partTimeValue), source: partTimeText.source, confidence: partTimeText.confidence }
     : firstNumberAfter(lines, /%\s*part.?time|part.?time\s*%?/i, 0, 100);
 
   let basePay = firstNumberAfter(
@@ -232,8 +238,8 @@ export function analyzePayslipText(rawText: string): PayslipAnalysis {
   const overtimeTariffs: DetectedValue<number>[] = [];
   for (const line of lines) {
     if (!/straordinar/i.test(line)) continue;
-    for (const match of line.matchAll(/(?:\+\s*)?(\d{1,3}(?:[.,]\d{1,2})?)\s*%/g)) {
-      const value = numberIt(match[1]);
+    for (const match of line.matchAll(/(?<![\d.,])(?:\+\s*)?(\d+(?:[.,]\d+)?)\s*%/g)) {
+      const value = parsePayslipNumber(match[1]);
       if (value !== null) {
         overtimeRates.push({ value, source: compact(line), confidence: "alta", derived: false });
       }
@@ -243,8 +249,8 @@ export function analyzePayslipText(rawText: string): PayslipAnalysis {
   if (basePay.value !== null) {
     for (const line of lines) {
       if (!/straordinar/i.test(line) || /%/.test(line)) continue;
-      const values = [...line.matchAll(/(?:€\s*)?(\d{1,3}[.,]\d{2,4})/g)]
-        .map((match) => numberIt(match[1]))
+      const values = numberCandidates(line)
+        .map(parsePayslipNumber)
         .filter((value): value is number => value !== null);
       const tariff = values.find((candidate) => candidate >= basePay.value! && candidate <= basePay.value! * 3);
       if (tariff === undefined) continue;
@@ -265,8 +271,8 @@ export function analyzePayslipText(rawText: string): PayslipAnalysis {
   const findPercent = (pattern: RegExp): DetectedValue<number> => {
     for (const line of lines) {
       if (!pattern.test(line)) continue;
-      const match = line.match(/(?:\+\s*)?(\d{1,3}(?:[.,]\d{1,2})?)\s*%/);
-      const value = match ? numberIt(match[1]) : null;
+      const match = line.match(/(?<![\d.,])(?:\+\s*)?(\d+(?:[.,]\d+)?)\s*%/);
+      const value = match ? parsePayslipNumber(match[1]) : null;
       if (value !== null) return { value, source: compact(line), confidence: "alta" };
     }
     return missingNumber();
@@ -274,13 +280,17 @@ export function analyzePayslipText(rawText: string): PayslipAnalysis {
 
   const allowances: DetectedAllowance[] = [];
   for (const line of lines) {
-    const match = line.match(/(indennit[aà][^\d€]{0,45})(?:€\s*)?(\d+(?:[.,]\d{1,2}))?/i);
+    const match = line.match(/(indennit[aà][^\d€]{0,45})/i);
     if (!match) continue;
+    const candidates = numberCandidates(line.slice(match.index! + match[0].length));
+    const rawAmount = candidates.length === 1 ? candidates[0] : null;
+    const amount = rawAmount ? inspectPayslipNumber(rawAmount) : null;
     allowances.push({
       name: compact(match[1]).replace(/[:-]+$/, ""),
-      amount: match[2] ? numberIt(match[2]) : null,
-      source: compact(line),
-      confidence: match[2] ? "media" : "bassa",
+      amount: amount?.value ?? null,
+      source: candidates.length > 1 ? `Più valori numerici da verificare: ${compact(line)}`
+        : amount?.status === "uncertain" ? `Formato numerico incerto (${rawAmount}): ${compact(line)}` : compact(line),
+      confidence: amount?.status === "valid" ? "media" : "bassa",
     });
   }
 
@@ -301,10 +311,19 @@ export function analyzePayslipText(rawText: string): PayslipAnalysis {
   }
 
   const totals: Array<{ label: string; value: number; source: string }> = [];
+  const uncertainTotals: Record<string, DetectedValue<string | number>> = {};
   for (const line of lines) {
-    const match = line.match(/(totale\s+(?:competenze|ritenute|lordo|netto|ore)|lordo(?:\s+totale)?|netto\s+(?:(?:in\s+)?busta|a\s+pagare))[^\d]{0,20}(\d{1,3}(?:\.\d{3})*(?:,\d{1,2})?|\d+(?:[.,]\d{1,2})?)/i);
-    const value = match ? numberIt(match[2]) : null;
-    if (match && value !== null) totals.push({ label: compact(match[1]), value, source: compact(line) });
+    const match = line.match(/totale\s+(?:competenze|ritenute|lordo|netto|ore)|lordo(?:\s+totale)?|netto\s+(?:(?:in\s+)?busta|a\s+pagare)/i);
+    if (!match) continue;
+    const tail = line.slice(match.index! + match[0].length);
+    const candidates = numberCandidates(tail);
+    const inspected = candidates.length === 1 ? inspectPayslipNumber(candidates[0]) : null;
+    if (inspected?.status === "valid") totals.push({ label: compact(match[0]), value: inspected.value, source: compact(line) });
+    else if (candidates.length > 1 || inspected?.status === "uncertain") {
+      uncertainTotals[`total:${compact(match[0]).toLocaleLowerCase("it-IT")}`] = {
+        value: null, confidence: "bassa", source: `Formato numerico incerto: ${compact(line)}`,
+      };
+    }
   }
 
   return {
@@ -327,6 +346,7 @@ export function analyzePayslipText(rawText: string): PayslipAnalysis {
     level,
     totalElementsPay: firstNumberAfter(lines, /totale\s+elementi\s+retributivi/i, 100, 30000),
     totals: totals.slice(0, 6),
+    extraFields: uncertainTotals,
     items: [],
   };
 }
@@ -336,7 +356,7 @@ export function buildPayslipSettingsPatch(values: ConfirmedPayslipValues): Parti
   if (values.basePay !== undefined) patch.basePay = values.basePay;
   if (values.monthlyPay !== undefined) patch.monthlyReferencePay = values.monthlyPay;
   if (values.ordinaryHours !== undefined) patch.payslipReferenceHours = values.ordinaryHours;
-  if (values.overtimeRates?.length) {
+  if (values.overtimeRates?.length === 1) {
     patch.overtimeRates = values.overtimeRates;
     patch.overtimePct = values.overtimeRates[0];
   }

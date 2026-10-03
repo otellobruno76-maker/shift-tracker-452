@@ -25,6 +25,26 @@ describe("parser strutturato cedolini", () => {
     expect(result.basePay.confidence).toBe("alta");
   });
 
+  it("interpreta il punto decimale in Dato Base senza moltiplicare per dieci", () => {
+    const document = buildStructuredDocument([
+      token("Voce", 20, 620), token("Descrizione", 100, 620), token("Dato Base", 440, 620), token("Competenze", 650, 620),
+      token("100", 20, 600), token("Ferie godute ore", 100, 600), token("12.5", 440, 600), token("25,00", 650, 600),
+      token("110", 20, 580), token("Permessi goduti ore", 100, 580), token("12.5", 440, 580), token("25,00", 650, 580),
+    ]);
+    const result = analyzeStructuredPayslip(document);
+    expect(result.basePay.value).toBe(12.5);
+    expect(result.basePay.source).toContain("Dato Base");
+  });
+
+  it("segnala incerto un valore geometrico con separatore ambiguo", () => {
+    const document = buildStructuredDocument([
+      token("Voce", 20, 620), token("Descrizione", 100, 620), token("Dato Base", 440, 620), token("Competenze", 650, 620),
+      token("100", 20, 600), token("Ferie godute ore", 100, 600), token("1.234", 440, 600), token("25,00", 650, 600),
+      token("110", 20, 580), token("Permessi goduti ore", 100, 580), token("1.234", 440, 580), token("25,00", 650, 580),
+    ]);
+    expect(analyzeStructuredPayslip(document).basePay.value).toBeNull();
+  });
+
   it("mantiene distinta la retribuzione mensile", () => {
     const result = analyzeStructuredPayslip(structuredDocumentFromText("Qualifica | Operaio a mese\nRetribuzione mese | 931,38"));
     expect(result.monthlyPay.value).toBe(931.38);

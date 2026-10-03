@@ -6,15 +6,32 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { inspectPayslipNumber, parsePayslipNumber } from "@/lib/payslipNumber";
 import { deletePayslip, savePayslip, usePayslips } from "@/lib/store";
 import { MONTHS_IT, type PayslipRecord } from "@/lib/types";
 
-const numberText = (value: number | null) => value === null ? "" : String(value).replace(".", ",");
-const parseNumber = (value: string) => {
-  if (!value.trim()) return null;
-  const parsed = Number(value.replace(/\./g, "").replace(",", "."));
-  return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
-};
+const numberText = (value: number | null | undefined) => value == null ? "" : String(value).replace(".", ",");
+const numericLabels = {
+  partTimePct: "Part-time %", basePay: "Paga oraria", ordinaryHours: "Ore ordinarie",
+  dailyOrdinaryHours: "Ore ordinarie giornaliere", workedHours: "Ore lavorate", workedDays: "Giorni lavorati",
+  totalElementsPay: "Totale elementi retributivi", grossTotal: "Lordo / competenze", netTotal: "Netto a pagare",
+  dailyPay: "Paga giornaliera", monthlyPay: "Paga mensile", overtimeHours: "Ore straordinarie",
+  nightPct: "Notturno %", holidayPct: "Festivo %",
+} as const;
+type NumericField = keyof typeof numericLabels;
+type NumericDraft = Record<NumericField, string>;
+const numericFields = Object.keys(numericLabels) as NumericField[];
+const numericDraftFor = (record: PayslipRecord | null): NumericDraft => Object.fromEntries(
+  numericFields.map((key) => [key, numberText(record?.[key])]),
+) as NumericDraft;
+
+function parseNumberList(raw: string): number[] | null {
+  if (!raw.trim()) return [];
+  const parts = raw.split(/[;\n]+/).map((part) => part.trim());
+  if (parts.some((part) => !part)) return null;
+  const values = parts.map(parsePayslipNumber);
+  return values.every((value): value is number => value !== null && value >= 0) ? values : null;
+}
 
 function monthLabel(month: string): string {
   const [year, index] = month.split("-").map(Number);
@@ -76,16 +93,77 @@ export default function Cedolini() {
 function EditDialog({ record, onClose }: { record: PayslipRecord | null; onClose: () => void }) {
   const payslips = usePayslips();
   const [draft, setDraft] = useState<PayslipRecord | null>(record);
+  const [numericDraft, setNumericDraft] = useState<NumericDraft>(() => numericDraftFor(record));
+  const [tariffsDraft, setTariffsDraft] = useState(() => record?.overtimeTariffs?.join("; ") ?? "");
+  const [ratesDraft, setRatesDraft] = useState(() => record?.overtimeRates.join("; ") ?? "");
+  const [validationError, setValidationError] = useState("");
   const [saving, setSaving] = useState(false);
-  useEffect(() => setDraft(record), [record]);
+  useEffect(() => {
+    setDraft(record);
+    setNumericDraft(numericDraftFor(record));
+    setTariffsDraft(record?.overtimeTariffs?.join("; ") ?? "");
+    setRatesDraft(record?.overtimeRates.join("; ") ?? "");
+    setValidationError("");
+  }, [record]);
   const update = (patch: Partial<PayslipRecord>) => draft && setDraft({ ...draft, ...patch });
+  const updateNumber = (key: NumericField, value: string) => {
+    setNumericDraft((previous) => ({ ...previous, [key]: value }));
+    setValidationError("");
+  };
+  const numericInput = (key: NumericField) => <Input aria-label={numericLabels[key]} inputMode="decimal" value={numericDraft[key]} onChange={(event) => updateNumber(key, event.target.value)} />;
   const confirmSave = async () => {
-    if (!draft?.month) return toast.error("Scegli mese e anno.");
+    if (!draft || !record) return;
+    if (!draft.month) return toast.error("Scegli mese e anno.");
     if (payslips.some((item) => item.month === draft.month && item.id !== draft.id)) return toast.error("Esiste già un cedolino per questo mese.");
     if (saving) return;
+    const parsed: Partial<Record<NumericField, number | null>> = {};
+    for (const key of numericFields) {
+      const raw = numericDraft[key].trim();
+      if (!raw) { parsed[key] = null; continue; }
+      const value = parsePayslipNumber(raw);
+      if (value === null) {
+        const reason = inspectPayslipNumber(raw).status === "uncertain" ? "ambiguo" : "non valido";
+        setValidationError(`Il valore di “${numericLabels[key]}” è ${reason}. Correggilo o svuota il campo per escluderlo.`);
+        return;
+      }
+      if (value < 0 && key !== "grossTotal" && key !== "netTotal") {
+        setValidationError(`Il valore di “${numericLabels[key]}” non può essere negativo.`);
+        return;
+      }
+      parsed[key] = value;
+    }
+    const overtimeTariffs = parseNumberList(tariffsDraft);
+    const overtimeRates = parseNumberList(ratesDraft);
+    if (overtimeTariffs === null || overtimeRates === null) {
+      setValidationError(`Controlla ${overtimeTariffs === null ? "le tariffe" : "le maggiorazioni"} dello straordinario: separa i valori con “;” e correggi quelli ambigui.`);
+      return;
+    }
+    const provenance = { ...(draft.fieldProvenance ?? {}) };
+    for (const key of numericFields) {
+      if (parsed[key] === null) delete provenance[key];
+      else if (parsed[key] !== (record[key] ?? null)) provenance[key] = { source: "manuale", confidence: "alta" };
+    }
+    for (const [key, value, previous] of [
+      ["overtimeTariffs", overtimeTariffs, record.overtimeTariffs ?? []],
+      ["overtimeRates", overtimeRates, record.overtimeRates],
+    ] as const) {
+      if (value.length === 0) delete provenance[key];
+      else if (JSON.stringify(value) !== JSON.stringify(previous)) provenance[key] = { source: "manuale", confidence: "alta" };
+    }
+    for (const key of ["qualification", "contractCode", "ccnl", "level"] as const) {
+      if (draft[key] === "") delete provenance[key];
+      else if (draft[key] !== record[key]) provenance[key] = { source: "manuale", confidence: "alta" };
+    }
+    const grossOrNet = /\b(?:lordo|totale\s+competenze|netto)\b/i;
+    const updated: PayslipRecord = {
+      ...draft, ...parsed, overtimeTariffs, overtimeRates, fieldProvenance: provenance,
+      totals: draft.totals.filter((item) => !grossOrNet.test(item.label)),
+      items: draft.items?.filter((item) => item.category !== "gross" && item.category !== "net" && !grossOrNet.test(item.originalDescription)),
+      updatedAt: new Date().toISOString(),
+    };
     setSaving(true);
     try {
-      await savePayslip({ ...draft, updatedAt: new Date().toISOString() }, record);
+      await savePayslip(updated, record);
       onClose();
       toast.success("Correzioni salvate.");
     } catch (error) {
@@ -99,21 +177,22 @@ function EditDialog({ record, onClose }: { record: PayslipRecord | null; onClose
     <Field label="Mese e anno"><Input type="month" value={draft.month} onChange={(event) => update({ month: event.target.value })} /></Field>
     <Field label="Tipo di retribuzione"><select className="h-11 w-full rounded-md border border-input bg-white px-3" value={draft.payType ?? ""} onChange={(event) => update({ payType: event.target.value as PayslipRecord["payType"] })}><option value="">Non specificato</option><option value="oraria">Oraria</option><option value="giornaliera">Giornaliera</option><option value="mensile">Mensile</option></select></Field>
     <div className="grid grid-cols-2 gap-3"><Field label="Qualifica"><Input value={draft.qualification ?? ""} onChange={(event) => update({ qualification: event.target.value })} /></Field><Field label="Codice contratto"><Input value={draft.contractCode ?? ""} onChange={(event) => update({ contractCode: event.target.value })} /></Field></div>
-    <Field label="Part-time %"><Input inputMode="decimal" value={numberText(draft.partTimePct ?? null)} onChange={(event) => update({ partTimePct: parseNumber(event.target.value) })} /></Field>
-    <div className="grid grid-cols-2 gap-3"><Field label="Paga oraria"><Input inputMode="decimal" value={numberText(draft.basePay)} onChange={(event) => update({ basePay: parseNumber(event.target.value) })} /></Field><Field label="Ore ordinarie"><Input inputMode="decimal" value={numberText(draft.ordinaryHours)} onChange={(event) => update({ ordinaryHours: parseNumber(event.target.value) })} /></Field></div>
-    <Field label="Ore ordinarie giornaliere"><Input inputMode="decimal" value={numberText(draft.dailyOrdinaryHours ?? null)} onChange={(event) => update({ dailyOrdinaryHours: parseNumber(event.target.value) })} /></Field>
-    <div className="grid grid-cols-2 gap-3"><Field label="Ore lavorate"><Input inputMode="decimal" value={numberText(draft.workedHours ?? null)} onChange={(event) => update({ workedHours: parseNumber(event.target.value) })} /></Field><Field label="Giorni lavorati"><Input inputMode="decimal" value={numberText(draft.workedDays ?? null)} onChange={(event) => update({ workedDays: parseNumber(event.target.value) })} /></Field></div>
-    <Field label="Totale elementi retributivi"><Input inputMode="decimal" value={numberText(draft.totalElementsPay ?? null)} onChange={(event) => update({ totalElementsPay: parseNumber(event.target.value) })} /></Field>
-    <div className="grid grid-cols-2 gap-3"><Field label="Lordo / competenze"><Input inputMode="decimal" value={numberText(draft.grossTotal ?? null)} onChange={(event) => update({ grossTotal: parseNumber(event.target.value) })} /></Field><Field label="Netto a pagare"><Input inputMode="decimal" value={numberText(draft.netTotal ?? null)} onChange={(event) => update({ netTotal: parseNumber(event.target.value) })} /></Field></div>
-    <div className="grid grid-cols-2 gap-3"><Field label="Paga giornaliera"><Input inputMode="decimal" value={numberText(draft.dailyPay ?? null)} onChange={(event) => update({ dailyPay: parseNumber(event.target.value) })} /></Field><Field label="Paga mensile"><Input inputMode="decimal" value={numberText(draft.monthlyPay ?? null)} onChange={(event) => update({ monthlyPay: parseNumber(event.target.value) })} /></Field></div>
-    <div className="grid grid-cols-2 gap-3"><Field label="Ore straordinarie"><Input inputMode="decimal" value={numberText(draft.overtimeHours ?? null)} onChange={(event) => update({ overtimeHours: parseNumber(event.target.value) })} /></Field><Field label="Tariffe straordinario"><Input value={(draft.overtimeTariffs ?? []).join("; ")} onChange={(event) => update({ overtimeTariffs: event.target.value.split(/[;,]/).map(parseNumber).filter((value): value is number => value !== null) })} /></Field></div>
-    <Field label="Maggiorazioni straordinari (%)"><Input value={draft.overtimeRates.join("; ")} onChange={(event) => update({ overtimeRates: event.target.value.split(/[;,]/).map((part) => parseNumber(part)).filter((value): value is number => value !== null) })} /></Field>
-    <div className="grid grid-cols-2 gap-3"><Field label="Notturno %"><Input value={numberText(draft.nightPct)} onChange={(event) => update({ nightPct: parseNumber(event.target.value) })} /></Field><Field label="Festivo %"><Input value={numberText(draft.holidayPct)} onChange={(event) => update({ holidayPct: parseNumber(event.target.value) })} /></Field></div>
+    <Field label="Part-time %">{numericInput("partTimePct")}</Field>
+    <div className="grid grid-cols-2 gap-3"><Field label="Paga oraria">{numericInput("basePay")}</Field><Field label="Ore ordinarie">{numericInput("ordinaryHours")}</Field></div>
+    <Field label="Ore ordinarie giornaliere">{numericInput("dailyOrdinaryHours")}</Field>
+    <div className="grid grid-cols-2 gap-3"><Field label="Ore lavorate">{numericInput("workedHours")}</Field><Field label="Giorni lavorati">{numericInput("workedDays")}</Field></div>
+    <Field label="Totale elementi retributivi">{numericInput("totalElementsPay")}</Field>
+    <div className="grid grid-cols-2 gap-3"><Field label="Lordo / competenze">{numericInput("grossTotal")}</Field><Field label="Netto a pagare">{numericInput("netTotal")}</Field></div>
+    <p className="text-xs text-[#64748B]">Svuota Lordo o Netto per escludere quel valore dai confronti.</p>
+    <div className="grid grid-cols-2 gap-3"><Field label="Paga giornaliera">{numericInput("dailyPay")}</Field><Field label="Paga mensile">{numericInput("monthlyPay")}</Field></div>
+    <div className="grid grid-cols-2 gap-3"><Field label="Ore straordinarie">{numericInput("overtimeHours")}</Field><Field label="Tariffe straordinario"><Input aria-label="Tariffe straordinario" value={tariffsDraft} onChange={(event) => { setTariffsDraft(event.target.value); setValidationError(""); }} /></Field></div>
+    <Field label="Maggiorazioni straordinari (%)"><Input aria-label="Maggiorazioni straordinari (%)" value={ratesDraft} onChange={(event) => { setRatesDraft(event.target.value); setValidationError(""); }} /></Field>
+    <div className="grid grid-cols-2 gap-3"><Field label="Notturno %">{numericInput("nightPct")}</Field><Field label="Festivo %">{numericInput("holidayPct")}</Field></div>
     <div className="grid grid-cols-2 gap-3"><Field label="CCNL"><Input value={draft.ccnl} onChange={(event) => update({ ccnl: event.target.value })} /></Field><Field label="Livello"><Input value={draft.level} onChange={(event) => update({ level: event.target.value })} /></Field></div>
     {draft.allowances.length > 0 && <div className="rounded-xl bg-[#F8FAFC] p-3"><p className="text-sm font-extrabold">Indennità</p>{draft.allowances.map((item, index) => <p key={index} className="mt-1 text-sm">{item.name}: {item.amount === null ? "importo non rilevato" : `${item.amount.toLocaleString("it-IT")} €`}</p>)}</div>}
     {draft.totals.length > 0 && <div className="rounded-xl bg-[#F8FAFC] p-3"><p className="text-sm font-extrabold">Totali rilevati</p>{draft.totals.map((item, index) => <p key={index} className="mt-1 text-sm">{item.label}: {item.value.toLocaleString("it-IT")}</p>)}</div>}
     <p className="text-xs text-[#64748B]">Caricato il {new Date(draft.uploadedAt).toLocaleDateString("it-IT")} · Base pronta per il futuro confronto con le ore registrate nell’app.</p>
-  </div>}<DialogFooter className="gap-2"><Button variant="outline" disabled={saving} onClick={onClose}>Chiudi</Button><Button data-testid="btn-save-payslip-edits" disabled={saving} onClick={() => void confirmSave()}>Salva correzioni</Button></DialogFooter></DialogContent></Dialog>;
+  </div>}{validationError && <p role="alert" className="rounded-xl bg-red-50 p-3 text-sm text-red-800">{validationError}</p>}<DialogFooter className="gap-2"><Button variant="outline" disabled={saving} onClick={onClose}>Chiudi</Button><Button data-testid="btn-save-payslip-edits" disabled={saving} onClick={() => void confirmSave()}>Salva correzioni</Button></DialogFooter></DialogContent></Dialog>;
 }
 
 function Field({ label, children }: { label: string; children: ReactNode }) {
